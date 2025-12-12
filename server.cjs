@@ -1560,6 +1560,72 @@ app.post('/api/automate', async (req, res) => {
   }
 });
 
+// Test headless: false compatibility for extensions
+app.post('/api/test-headless', async (req, res) => {
+  let browser;
+  
+  try {
+    console.log('[HEADLESS TEST] Testing headless: false on this server...');
+    console.log('[HEADLESS TEST] OS:', process.platform);
+    console.log('[HEADLESS TEST] Display:', process.env.DISPLAY || 'NOT SET');
+    
+    // Try launching with headless: false
+    browser = await puppeteer.launch({
+      headless: false,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-first-run',
+        '--no-zygote',
+      ]
+    });
+    
+    console.log('[HEADLESS TEST] ✓ Browser launched successfully with headless: false');
+    
+    const page = await browser.newPage();
+    await page.goto('https://www.google.com', { waitUntil: 'networkidle2', timeout: 10000 });
+    
+    const title = await page.title();
+    console.log('[HEADLESS TEST] Page loaded:', title);
+    
+    await browser.close();
+    
+    return res.json({
+      success: true,
+      message: 'headless: false works on this server!',
+      display: process.env.DISPLAY || 'None (but works anyway)',
+      platform: process.platform
+    });
+    
+  } catch (error) {
+    console.error('[HEADLESS TEST] ✗ Failed:', error.message);
+    
+    // Check if it's the DISPLAY error
+    const isDisplayError = error.message.includes('DISPLAY') || 
+                          error.message.includes('X11') ||
+                          error.message.includes('cannot open display');
+    
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (e) {}
+    }
+    
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      needsXvfb: isDisplayError,
+      platform: process.platform,
+      display: process.env.DISPLAY || 'NOT SET',
+      solution: isDisplayError ? 
+        'Install Xvfb: sudo apt-get install -y xvfb && export DISPLAY=:99 && Xvfb :99 -screen 0 1920x1080x24 &' : 
+        'Unknown error - check logs'
+    });
+  }
+});
+
 app.listen(3000, () => {
   console.log('✅ Server running on port 3000 - Browser API + Luna Proxy + SERP API');
   console.log('📊 Search Traffic: Browser API (auto-CAPTCHA solving)');
