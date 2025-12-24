@@ -18,7 +18,6 @@ function extractOrganicLinksFromHtml(html) {
 
   const patterns = [
     /href="\/url\?q=([^"&]+)/g,                                    // /url?q=
-    /href="https?:\/\/www\.google\.com\/url\?q=([^"&]+)/g,        // https://www.google.com/url?q=
     /data-href="\/url\?q=([^"&]+)/g,                               // data-href variant
     /href="(https?:\/\/[^"\s]+)"/g                               // any absolute link
   ];
@@ -44,6 +43,55 @@ function extractOrganicLinksFromHtml(html) {
 
 // Add stealth plugin with all evasions
 puppeteer.use(StealthPlugin());
+
+// Global session concurrency control (forcefully enforced)
+const MAX_CONCURRENT_SESSIONS = 3;
+let activeSessionCount = 0;
+
+// ════════════════════════════════════════════════════════════════════════
+// JOB QUEUE (FIFO) WITH CONCURRENCY CONTROL
+// ════════════════════════════════════════════════════════════════════════
+const JOBS = new Map();       // jobId -> { status, result|error, logs, timestamps }
+const QUEUE = [];             // [{ jobId, payload }]
+
+function genJobId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function runQueue() {
+  while (activeSessionCount < MAX_CONCURRENT_SESSIONS && QUEUE.length > 0) {
+    const { jobId, payload } = QUEUE.shift();
+    startJob(jobId, payload).catch(() => {}); // fire-and-forget
+  }
+}
+
+async function startJob(jobId, payload) {
+  activeSessionCount++;
+  console.log(`[QUEUE] Starting job ${jobId} (${activeSessionCount}/${MAX_CONCURRENT_SESSIONS})`);
+  JOBS.set(jobId, { status: 'running', startedAt: Date.now(), sessionId: jobId });
+
+  try {
+    const result = await processAutomateJob(payload, jobId);
+    JOBS.set(jobId, {
+      status: 'completed',
+      finishedAt: Date.now(),
+      result
+    });
+    console.log(`[QUEUE] Job ${jobId} completed successfully`);
+  } catch (err) {
+    JOBS.set(jobId, {
+      status: 'failed',
+      finishedAt: Date.now(),
+      error: err.message,
+      stack: err.stack
+    });
+    console.error(`[QUEUE] Job ${jobId} failed: ${err.message}`);
+  } finally {
+    activeSessionCount--;
+    console.log(`[QUEUE] Job ${jobId} finished (${activeSessionCount}/${MAX_CONCURRENT_SESSIONS} active)`);
+    runQueue(); // Process next queued job
+  }
+}
 
 // ════════════════════════════════════════════════════════════════════════
 // REAL DEVICE MODE - Advanced Fingerprinting & Anti-Detection
@@ -133,8 +181,226 @@ const DEVICE_PROFILES = {
   },
 };
 
-// Generate random device profile with geo-location bias
+// Cache store for generated device profiles
+const deviceProfileCache = {};
+
+// Lightweight bandwidth tracker (response headers only)
+function createBandwidthTracker(sessionLogger) {
+  let totalBytes = 0;
+  const onResponse = (response) => {
+    try {
+      const headers = response.headers() || {};
+      const len = headers['content-length'] || headers['Content-Length'];
+      if (len) {
+        const parsed = parseInt(len, 10);
+        if (!Number.isNaN(parsed)) totalBytes += parsed;
+      }
+    } catch (_) {
+      // ignore parsing issues
+    }
+  };
+  const attachToPage = (page) => {
+    if (page && page.on) {
+      page.on('response', onResponse);
+    }
+  };
+  const getTotalBytes = () => totalBytes;
+  const report = (targetUrl, actualDurationSec) => {
+    const mb = (totalBytes / (1024 * 1024)).toFixed(3);
+    const message = `${targetUrl} | bytes=${totalBytes} (${mb} MB) | duration=${actualDurationSec}s`;
+    console.log(`[BANDWIDTH] ${message}`);
+    if (sessionLogger && sessionLogger.log) {
+      sessionLogger.log('BANDWIDTH', message, 'info');
+    }
+  };
+  return { attachToPage, getTotalBytes, report };
+}
+
+// Ultra-lean resource guards: aggressive bandwidth reduction to <300KB/session
+function initLeanResourceGuards(page, mainHost) {
+  const analyticsHosts = [
+    // Google Analytics & Tag Manager
+    'google-analytics.com',
+    'www.google-analytics.com',
+    'ssl.google-analytics.com',
+    'googletagmanager.com',
+    'www.googletagmanager.com',
+    'gtm-msr.appspot.com',
+    'analytics.google.com',
+    'www.googletagmanager.com/gtag/',
+    'google.com',
+    'www.google.com',
+    
+    // Microsoft Clarity
+    'clarity.ms',
+    'www.clarity.ms',
+    'static.clarity.ms',
+    'clr.ms',
+    'clrouter.clr.ms',
+    'config.clarity.ms',
+    
+    // Hotjar
+    'hotjar.com',
+    'static.hotjar.com',
+    'script.hotjar.com',
+    'hjcdn.com',
+    'hjus.com',
+    'hjcdn.hjus.com',
+    'ws.hotjar.com',
+    'vars.hotjar.com',
+    
+    // Segment
+    'cdn.segment.com',
+    'api.segment.io',
+    'segment.com',
+    
+    // Mixpanel
+    'mixpanel.com',
+    'cdn.mixpanel.com',
+    'api.mixpanel.com',
+    
+    // SimilarWeb
+    'similarweb.com',
+    'www.similarweb.com',
+    'cdn.similarweb.com',
+    'swzjjqqe.similarweb.com',
+    
+    // Google APIs (for extensions and page functionality)
+    'googleapis.com',
+    'google-analytics-bundle.js',
+    'recaptcha.net',
+    'gstatic.com',
+    
+    // Additional analytics
+    'amplitude.com',
+    'api.amplitude.com',
+    'fullstory.com',
+    'api.fullstory.com',
+    'amplitude-js.fullstory.com'
+  ];
+
+  const isAnalytics = (url) => {
+    try {
+      const u = new URL(url);
+      return analyticsHosts.some(h => u.hostname.includes(h));
+    } catch {
+      return false;
+    }
+  };
+
+  page.setRequestInterception(true).catch(() => {});
+  page.on('request', (req) => {
+    try {
+      const url = req.url();
+      const type = req.resourceType();
+      const host = (() => { try { return new URL(url).hostname; } catch { return ''; } })();
+
+      // CRITICAL: Allow extension:// URLs (extension resources)
+      if (url.startsWith('extension://') || url.startsWith('chrome-extension://')) {
+        return req.continue();
+      }
+
+      // Always allow main document
+      if (req.isNavigationRequest() || type === 'document') return req.continue();
+
+      // Block all heavy types globally (including stylesheets)
+      if (type === 'image' || type === 'media' || type === 'font' || type === 'stylesheet') return req.abort();
+
+      // Allow analytics and extension scripts
+      if (type === 'script') {
+        if (host === mainHost || isAnalytics(url)) return req.continue();
+        return req.abort();
+      }
+
+      // Allow extension XHR/fetch and analytics (critical for data transmission)
+      if (type === 'xhr' || type === 'fetch') {
+        // Always allow same-origin (extension calls)
+        if (host === mainHost) return req.continue();
+        // Allow all analytics trackers
+        if (isAnalytics(url)) return req.continue();
+        // Block third-party services
+        return req.abort();
+      }
+
+      // Block anything else third-party (except analytics)
+      if (host !== mainHost && !isAnalytics(url)) return req.abort();
+      
+      return req.continue();
+    } catch {
+      try { req.continue(); } catch {}
+    }
+  });
+}
+
+// Random browsing helper: scroll + optional multi-page navigation
+async function maybeMultiPageBrowse(page, baseUrl, sessionLogger) {
+  // Always scroll a bit on the current page
+  const scrolls = Math.floor(Math.random() * 3) + 1;
+  for (let i = 0; i < scrolls; i++) {
+    try {
+      await page.evaluate(() => window.scrollBy(0, window.innerHeight / 2));
+      await new Promise(r => setTimeout(r, 1000 + Math.random() * 2000));
+    } catch (err) {
+      if (sessionLogger) sessionLogger.warning('BEHAVIOR', `Scroll failed: ${err.message}`);
+    }
+  }
+
+  // Increased probability to 70% for multi-page navigation
+  const shouldMulti = Math.random() < 0.70;
+  if (!shouldMulti) {
+    if (sessionLogger) sessionLogger.log('BEHAVIOR', 'Single-page browsing (no multi-page)', 'info');
+    return;
+  }
+
+  if (sessionLogger) sessionLogger.log('BEHAVIOR', 'Starting multi-page navigation', 'info');
+  
+  const pagesToVisit = Math.floor(Math.random() * 3) + 2; // total pages = 2-4
+  const origin = (() => {
+    try { return new URL(baseUrl).origin; } catch { return null; }
+  })();
+
+  if (sessionLogger) sessionLogger.log('BEHAVIOR', `Will visit ${pagesToVisit} total pages (including current)`, 'info');
+
+  for (let i = 0; i < pagesToVisit - 1; i++) {
+    try {
+      const nextUrl = await page.evaluate((originHint) => {
+        const anchors = Array.from(document.querySelectorAll('a[href]'));
+        const hrefs = anchors.map(a => a.href).filter(Boolean);
+        if (!hrefs.length) return null;
+        const sameOrigin = originHint ? hrefs.filter(h => h.startsWith(originHint)) : [];
+        const pool = sameOrigin.length ? sameOrigin : hrefs;
+        const capped = pool.slice(0, 50);
+        return capped[Math.floor(Math.random() * capped.length)];
+      }, origin);
+
+      if (!nextUrl) {
+        if (sessionLogger) sessionLogger.log('BEHAVIOR', `No more links found after page ${i + 1}`, 'info');
+        break;
+      }
+
+      if (sessionLogger) sessionLogger.log('BEHAVIOR', `Navigating to page ${i + 2}/${pagesToVisit}: ${nextUrl.substring(0, 60)}...`, 'info');
+      await page.goto(nextUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      if (sessionLogger) sessionLogger.log('BEHAVIOR', `Multi-page nav to: ${nextUrl}`, 'success');
+
+      // Light scroll on the new page
+      await page.evaluate(() => window.scrollBy(0, window.innerHeight / 2));
+      await new Promise(r => setTimeout(r, 800 + Math.random() * 1500));
+    } catch (err) {
+      if (sessionLogger) sessionLogger.warning('BEHAVIOR', `Multi-page nav issue: ${err.message}`);
+      break;
+    }
+  }
+  
+  if (sessionLogger) sessionLogger.success('BEHAVIOR', 'Multi-page browsing completed');
+}
+
+// Generate random device profile with geo-location bias (cached)
 function generateDeviceProfile(geoLocation = 'US') {
+  // Check cache first (same geo = same profile for this minute)
+  const cacheKey = `${geoLocation}_${Math.floor(Date.now() / 60000)}`;
+  if (deviceProfileCache[cacheKey]) {
+    return deviceProfileCache[cacheKey];
+  }
   const profileKeys = Object.keys(DEVICE_PROFILES);
   let selectedKey;
   
@@ -160,6 +426,12 @@ function generateDeviceProfile(geoLocation = 'US') {
     profile.deviceMemory = [4, 8, 16, 32][Math.floor(Math.random() * 4)];
   }
   
+  // Cache for 1 minute
+  deviceProfileCache[cacheKey] = profile;
+  // Clean old cache entries
+  Object.keys(deviceProfileCache).forEach(k => {
+    if (!k.startsWith(geoLocation)) delete deviceProfileCache[k];
+  });
   return profile;
 }
 
@@ -428,7 +700,7 @@ async function setRealisticHeaders(page, deviceProfile) {
 async function simulateGoogleSearch(page) {
   try {
     // Wait for SERP results
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+    await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
     
     // Random scrolling (Google tracks scroll depth)
     const scrolls = Math.floor(Math.random() * 3) + 1;
@@ -661,10 +933,10 @@ async function searchWithBrowserAPI(searchKeyword, geoLocation, browserConfig, o
     
     // Add geo-targeting to username
     const geoCode = geoLocation ? geoLocation.toUpperCase() : 'US';
-    let authUsername = browser_username;
+    let authUsername = browser_username || '';
     
     // Bright Data uses -country-, Luna uses -region-
-    const isLunaProxy = browser_username.includes('admin_') || browser_username.includes('lunaproxy');
+    const isLunaProxy = authUsername.includes('admin_') || authUsername.includes('lunaproxy');
     
     if (isLunaProxy && !authUsername.includes('-region-')) {
       authUsername = `${authUsername}-region-${geoCode.toLowerCase()}`;
@@ -755,8 +1027,8 @@ async function searchWithBrowserAPI(searchKeyword, geoLocation, browserConfig, o
     
     try {
       const response = await searchPage.goto(googleUrl, { 
-        waitUntil: 'networkidle2', 
-        timeout: 60000 
+        waitUntil: 'domcontentloaded', 
+        timeout: 30000 
       });
       if (response) {
         lastStatusCode = response.status();
@@ -1127,13 +1399,29 @@ class SessionLogger {
 // LUNA HEADFUL DIRECT - Direct traffic with extension support
 // ════════════════════════════════════════════════════════════════════════
 
-async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, deviceProfile, extensionPath = null) {
+async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, deviceProfile, extensionPath = null, searchKeyword = null, customReferrer = null) {
   try {
     const { proxy, proxyUsername, proxyPassword } = lunaConfig;
+    
+    // Use custom referrer if provided, otherwise blank
+    const googleReferrer = customReferrer || '';
+    if (customReferrer) {
+      console.log(`[LUNA HEADFUL DIRECT] Using custom referrer: ${googleReferrer}`);
+    } else {
+      console.log(`[LUNA HEADFUL DIRECT] No custom referrer - using blank referrer`);
+    }
     
     console.log(`[LUNA HEADFUL DIRECT] Starting direct navigation to: ${targetUrl}`);
     console.log(`[LUNA HEADFUL DIRECT] Geo: ${geoLocation}, Proxy: ${proxy ? 'configured' : 'none'}`);
     console.log(`[LUNA HEADFUL DIRECT] Extension: ${extensionPath ? 'yes' : 'no'}`);
+    
+    // Validate proxy credentials before launching Chrome
+    if (!proxyUsername || !proxyPassword) {
+      throw new Error('Luna Headful Direct requires proxyUsername and proxyPassword');
+    }
+    
+    console.log(`[LUNA HEADFUL DIRECT] Proxy validation: credentials present`);
+    console.log(`[LUNA HEADFUL DIRECT] Username format: ${proxyUsername.substring(0, 20)}...`);
     
     // Parse proxy host/port from proxy string (format: http://host:port)
     let proxyHost = 'na.lunaproxy.com';
@@ -1146,6 +1434,8 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
       }
     }
     
+    console.log(`[LUNA HEADFUL DIRECT] Proxy endpoint: ${proxyHost}:${proxyPort}`);
+    
     // Build browser args - extension FIRST, then proxy
     const browserArgs = [
       '--no-sandbox',
@@ -1155,7 +1445,8 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
       '--ignore-certificate-errors',
       '--ignore-certificate-errors-spki-list',
       '--proxy-bypass-list=<-loopback>',
-      `--window-size=${deviceProfile.screenWidth},${deviceProfile.screenHeight}`
+      `--window-size=${deviceProfile.screenWidth},${deviceProfile.screenHeight}`,
+      '--remote-debugging-port=0'
     ];
     
     // Add extension FIRST if provided
@@ -1179,7 +1470,21 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
     
     console.log('[LUNA HEADFUL DIRECT] ✓ Browser launched (headless: false)');
     
+    console.log('[LUNA HEADFUL DIRECT] Creating new page (may take time with extension + proxy)...');
+    const startPageTime = Date.now();
     const lunaDirectPage = await lunaDirectBrowser.newPage();
+    const pageCreationTime = Date.now() - startPageTime;
+    console.log(`[LUNA HEADFUL DIRECT] ✓ Page created (${pageCreationTime}ms)`);
+    
+    // Set extra headers for referrer tracking (only if referrer provided)
+    const headers = {
+      'User-Agent': deviceProfile.ua || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    };
+    if (googleReferrer) {
+      headers['Referer'] = googleReferrer;
+    }
+    await lunaDirectPage.setExtraHTTPHeaders(headers);
+    console.log(`[LUNA HEADFUL DIRECT] ✓ Extra HTTP headers set${googleReferrer ? ' (with Referer)' : ' (no Referer)'}`);
     
     // Set proxy auth if provided
     if (proxyUsername && proxyPassword) {
@@ -1187,30 +1492,85 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
         ? proxyUsername 
         : `${proxyUsername}-region-${geoLocation.toLowerCase()}`;
       
+      console.log(`[LUNA HEADFUL DIRECT] Setting proxy authentication...`);
       await lunaDirectPage.authenticate({
         username: authUsername,
         password: proxyPassword
       });
-      console.log(`[LUNA HEADFUL DIRECT] ✓ Proxy authentication configured (${authUsername})`);
+      console.log(`[LUNA HEADFUL DIRECT] ✓ Proxy authentication configured`);
+      console.log(`[LUNA HEADFUL DIRECT] Auth username: ${authUsername.substring(0, 40)}...`);
+      console.log(`[LUNA HEADFUL DIRECT] Auth password: ${'*'.repeat(Math.min(proxyPassword.length, 8))}`);
+    } else {
+      console.warn(`[LUNA HEADFUL DIRECT] ⚠️ No proxy credentials provided!`);
     }
     
     // Apply device fingerprinting
+    console.log(`[LUNA HEADFUL DIRECT] Injecting device fingerprint...`);
     await injectRealDeviceFingerprint(lunaDirectPage, deviceProfile);
     await setRealisticHeaders(lunaDirectPage, deviceProfile);
+    console.log(`[LUNA HEADFUL DIRECT] ✓ Device fingerprinting injected`);
     
+    // Attach lean resource guards to reduce bandwidth while preserving analytics
+    try {
+      const host = new URL(targetUrl).hostname;
+      initLeanResourceGuards(lunaDirectPage, host);
+      console.log(`[LUNA HEADFUL DIRECT] ✓ Lean resource guards attached for host: ${host}`);
+    } catch (err) {
+      console.log(`[LUNA HEADFUL DIRECT] Resource guards attach failed: ${err.message}`);
+    }
+
     // Navigate to target URL
-    console.log(`[LUNA HEADFUL DIRECT] Navigating to: ${targetUrl}`);
+    console.log(`[LUNA HEADFUL DIRECT] Starting navigation...`);
+    console.log(`[LUNA HEADFUL DIRECT] Target: ${targetUrl}`);
+    console.log(`[LUNA HEADFUL DIRECT] Proxy: ${proxyHost}:${proxyPort}`);
+    console.log(`[LUNA HEADFUL DIRECT] Timeout: 120000ms (2 minutes)`);
     
     try {
-      await lunaDirectPage.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-      console.log(`[LUNA HEADFUL DIRECT] ✓ Page loaded successfully`);
+      console.log(`[LUNA HEADFUL DIRECT] goto()${googleReferrer ? ' with referrer...' : ' (no referrer)...'}`);
+      if (googleReferrer) {
+        console.log(`[LUNA HEADFUL DIRECT] Referrer: ${googleReferrer}`);
+      }
+      const startNavTime = Date.now();
+      const gotoOptions = { waitUntil: 'domcontentloaded', timeout: 45000 };
+      if (googleReferrer) {
+        gotoOptions.referer = googleReferrer;
+      }
+      await lunaDirectPage.goto(targetUrl, gotoOptions);
+      
+      // Wait for GA/GTM scripts to fire after domcontentloaded
+      await new Promise(r => setTimeout(r, 2000));
+      console.log(`[LUNA HEADFUL DIRECT] ✓ Allowed 2s for GA scripts to fire`);
+      
+      const navTime = Date.now() - startNavTime;
+      const finalUrl = lunaDirectPage.url();
+      console.log(`[LUNA HEADFUL DIRECT] ✓ Page loaded successfully (${navTime}ms)`);
+      console.log(`[LUNA HEADFUL DIRECT] Final URL: ${finalUrl}`);
+      
+      // Check if we ended up on an error page
+      if (finalUrl.includes('chrome-error') || finalUrl.includes('about:error')) {
+        console.error(`[LUNA HEADFUL DIRECT] ✗ ERROR PAGE DETECTED: ${finalUrl}`);
+        const errorText = await lunaDirectPage.evaluate(() => document.body.innerText);
+        console.error(`[LUNA HEADFUL DIRECT] Error details: ${errorText.substring(0, 500)}`);
+      }
     } catch (err) {
-      console.log(`[LUNA HEADFUL DIRECT] ⚠️ Navigation error: ${err.message}, trying networkidle0...`);
+      console.log(`[LUNA HEADFUL DIRECT] ⚠️ Navigation error: ${err.message}, retrying with domcontentloaded...`);
       try {
-        await lunaDirectPage.goto(targetUrl, { waitUntil: 'networkidle0', timeout: 30000 });
+        const gotoOptions = { waitUntil: 'domcontentloaded', timeout: 15000 };
+        if (googleReferrer) {
+          gotoOptions.referer = googleReferrer;
+        }
+        await lunaDirectPage.goto(targetUrl, gotoOptions);
+        const finalUrl = lunaDirectPage.url();
         console.log(`[LUNA HEADFUL DIRECT] ✓ Page loaded (networkidle0 fallback)`);
+        console.log(`[LUNA HEADFUL DIRECT] Final URL: ${finalUrl}`);
+        
+        if (finalUrl.includes('chrome-error') || finalUrl.includes('about:error')) {
+          console.error(`[LUNA HEADFUL DIRECT] ✗ ERROR PAGE DETECTED: ${finalUrl}`);
+        }
       } catch (retryErr) {
         console.log(`[LUNA HEADFUL DIRECT] ⚠️ Final navigation attempt failed: ${retryErr.message}`);
+        const finalUrl = lunaDirectPage.url();
+        console.error(`[LUNA HEADFUL DIRECT] Final URL after error: ${finalUrl}`);
       }
     }
     
@@ -1263,62 +1623,82 @@ app.post('/api/debug', (req, res) => {
   });
 });
 
-app.post('/api/automate', async (req, res) => {
-  const {
-    url,
-    geoLocation,
-    searchKeyword,
-    campaignType, // 'direct' or 'search'
-    // Direct traffic params
-    proxy,
-    proxyUsername,
-    proxyPassword,
-    // Search traffic params
-    browser_api_token,
-    browser_zone,
-    browser_customer_id,
-    browser_username,
-    browser_password,
-    browser_endpoint,
-    browser_port,
-    // Extension params
-    extensionId, // Chrome Web Store extension ID
-    // Common params
-    sessionId,
-    userJourney,
-    sessionDurationMin,
-    sessionDurationMax,
-    supabaseUrl,
-    supabaseKey
-  } = req.body;
+// ════════════════════════════════════════════════════════════════════════
+// PROCESS AUTOMATE JOB (EXTRACTED FROM /api/automate)
+// ════════════════════════════════════════════════════════════════════════
+async function processAutomateJob(reqBody, jobId) {
+  const sessionLogger = new SessionLogger(jobId);
+  const sessionStartMs = Date.now();
+  const bandwidthTracker = createBandwidthTracker(sessionLogger);
+
+  let browser;
+  let page;
+  let clickedUrl = reqBody.url;
+
+  try {
+    const {
+      url,
+      geoLocation,
+      searchKeyword,
+      campaignType, // 'direct' or 'search'
+      customReferrer, // Custom referrer from campaign settings
+      // Direct traffic params
+      proxy,
+      proxyUsername,
+      proxyPassword,
+      // Search traffic params
+      browser_api_token,
+      browser_zone,
+      browser_customer_id,
+      browser_username,
+      browser_password,
+      browser_endpoint,
+      browser_port,
+      // Extension params
+      extensionId, // Chrome Web Store extension ID
+      // Common params
+      sessionId,
+      userJourney,
+      sessionDurationMin,
+      sessionDurationMax,
+      supabaseUrl,
+      supabaseKey,
+      bounceRate
+    } = reqBody;
 
   // Optional feature flags / extra params (provide safe defaults)
-  const useLunaProxySearch = req.body.useLunaProxySearch || false;
-  const useBrowserAutomation = req.body.useBrowserAutomation || false;
-  const useSerpApi = req.body.useSerpApi || false;
-  const useLunaHeadfulDirect = req.body.useLunaHeadfulDirect || false;
-  const serp_api_token = req.body.serp_api_token;
-  const serp_customer_id = req.body.serp_customer_id;
-  const serp_zone_name = req.body.serp_zone_name;
-  const serp_endpoint = req.body.serp_endpoint;
-  const serp_port = req.body.serp_port;
+  let useLunaProxySearch = reqBody.useLunaProxySearch || false;
+  let useBrowserAutomation = reqBody.useBrowserAutomation || false;
+  let useSerpApi = reqBody.useSerpApi || false;
+  let useLunaHeadfulDirect = reqBody.useLunaHeadfulDirect || false;
+  const serp_api_token = reqBody.serp_api_token;
+  const serp_customer_id = reqBody.serp_customer_id;
+  const serp_zone_name = reqBody.serp_zone_name;
+  const serp_endpoint = reqBody.serp_endpoint;
+  const serp_port = reqBody.serp_port;
 
   // Prefer request-supplied token, else fall back to environment default
   const effectiveBrowserApiToken = browser_api_token || FALLBACK_BROWSER_API_TOKEN;
 
-  // Initialize session logger
-  const sessionLogger = new SessionLogger(sessionId);
-
-  let browser;
-  let page;
-  let clickedUrl = url;
-
-  try {
     const deviceProfile = generateDeviceProfile(geoLocation || 'US');
     sessionLogger.log('SESSION', `Campaign Type: ${campaignType}, Target: ${url}`, 'info');
     sessionLogger.log('DEVICE', `Using: ${deviceProfile.name}`, 'info');
     console.log(`[SESSION] Type: ${(campaignType || 'direct').toUpperCase()}, Target: ${url}`);
     console.log(`[DEVICE] Using: ${deviceProfile.name}`);
+    
+    // Direct traffic: force Luna headful path and require Luna proxy creds
+    if (campaignType === 'direct') {
+      useLunaProxySearch = false;
+      useBrowserAutomation = false;
+      useSerpApi = false;
+      useLunaHeadfulDirect = true;
+
+      if (!proxy || !proxyUsername || !proxyPassword) {
+        const msg = 'Direct traffic requires Luna proxy credentials (proxy, proxyUsername, proxyPassword)';
+        sessionLogger.error('LUNA', msg);
+        throw new Error(msg);
+      }
+    }
     
     // ═══════════════════════════════════════════════════════════
     // SEARCH CAMPAIGN - Browser API Only
@@ -1326,7 +1706,15 @@ app.post('/api/automate', async (req, res) => {
     if (campaignType === 'search') {
       console.log('[FLOW] ✓✓✓ Browser API mode - Search traffic ✓✓✓');
       
-      const googleReferrer = `https://www.google.com/search?q=${encodeURIComponent(searchKeyword || '')}&gl=${(geoLocation || 'us').toLowerCase()}&hl=en`;
+      // Use custom referrer if provided, otherwise blank
+      const googleReferrer = customReferrer || '';
+      if (customReferrer) {
+        sessionLogger.log('REFERRER', `Using custom referrer: ${customReferrer}`, 'info');
+        console.log(`[BROWSER API] Using custom referrer: ${customReferrer}`);
+      } else {
+        sessionLogger.log('REFERRER', 'No custom referrer - using blank', 'info');
+        console.log(`[BROWSER API] No custom referrer - using blank referrer`);
+      }
       
       // Download extension FIRST (before any browser launch)
       let extensionPath = null;
@@ -1420,10 +1808,10 @@ app.post('/api/automate', async (req, res) => {
       
       // Add geo-targeting to username
       const geoCode = geoLocation ? geoLocation.toUpperCase() : 'US';
-      let authUsername = browser_username;
+      let authUsername = browser_username || '';
       
       // Bright Data uses -country-, Luna uses -region-
-      const isLunaProxy = browser_username.includes('admin_') || browser_username.includes('lunaproxy');
+      const isLunaProxy = authUsername.includes('admin_') || authUsername.includes('lunaproxy');
       
       if (isLunaProxy && !authUsername.includes('-region-')) {
         authUsername = `${authUsername}-region-${geoCode.toLowerCase()}`;
@@ -1467,6 +1855,8 @@ app.post('/api/automate', async (req, res) => {
       console.log(`[BROWSER API] ✓ Browser launched with headless: false${extensionPath ? ' and extension' : ''}`);
 
       page = await browser.newPage();
+      bandwidthTracker.attachToPage(page);
+      try { initLeanResourceGuards(page, new URL(clickedUrl).hostname); } catch {}
       
       // Set proxy authentication with geo-targeting
       await page.authenticate({
@@ -1479,24 +1869,54 @@ app.post('/api/automate', async (req, res) => {
       await injectRealDeviceFingerprint(page, deviceProfile);
       await setRealisticHeaders(page, deviceProfile);
       
-      await page.goto(clickedUrl, { waitUntil: 'networkidle2', timeout: 60000, referer: googleReferrer });
+      const gotoOptions = { waitUntil: 'domcontentloaded', timeout: 30000 };
+      if (googleReferrer) {
+        gotoOptions.referer = googleReferrer;
+      }
+      await page.goto(clickedUrl, gotoOptions);
       
-      // Light human-like behavior on destination
-      const scrolls = Math.floor(Math.random() * 3) + 1;
-      for (let i = 0; i < scrolls; i++) {
-        await page.evaluate(() => window.scrollBy(0, window.innerHeight / 2));
-        await new Promise(r => setTimeout(r, 1000 + Math.random() * 2000));
+      // Wait for GA/GTM scripts to fire after domcontentloaded
+      await new Promise(r => setTimeout(r, 2000));
+      console.log(`[BROWSER API] ✓ Allowed 2s for GA scripts to fire`);
+      
+      // User journey (if provided) else random browsing with multi-page chance
+      if (userJourney && userJourney.length > 0) {
+        for (const action of userJourney) {
+          const { type, selector, url: actionUrl, text, delay } = action;
+          try {
+            if (type === 'click' && selector) {
+              await page.click(selector);
+              sessionLogger.log('JOURNEY', `Clicked: ${selector}`, 'success');
+            } else if (type === 'type' && selector) {
+              await page.type(selector, text, { delay: 100 });
+              sessionLogger.log('JOURNEY', `Typed in: ${selector}`, 'success');
+            } else if (type === 'navigate' && actionUrl) {
+              await page.goto(actionUrl, { waitUntil: 'networkidle2' });
+              sessionLogger.log('JOURNEY', `Navigated to: ${actionUrl}`, 'success');
+            }
+            if (delay) await new Promise(r => setTimeout(r, delay));
+          } catch (err) {
+            sessionLogger.warning('JOURNEY', err.message);
+          }
+        }
+        sessionLogger.success('JOURNEY', 'Completed');
+      } else {
+        await maybeMultiPageBrowse(page, clickedUrl, sessionLogger);
       }
 
-      // Dwell for session duration to allow GA to fire
-      const minDuration = (sessionDurationMin || 30) * 1000;
-      const maxDuration = (sessionDurationMax || 120) * 1000;
-      const duration = minDuration + Math.random() * (maxDuration - minDuration);
-      await new Promise(r => setTimeout(r, duration));
+      // Dwell/bounce duration honoring frontend inputs
+      const minSec = sessionDurationMin || 30;
+      const maxSec = sessionDurationMax || 120;
+      const shouldBounce = (bounceRate || 0) > 0 && Math.random() < ((bounceRate || 0) / 100);
+      const durationSec = shouldBounce ? Math.floor(5 + Math.random() * 5) : Math.floor(minSec + Math.random() * (maxSec - minSec));
+      lastPlannedDurationSec = durationSec;
+      await new Promise(r => setTimeout(r, durationSec * 1000));
       
+      const actualDurationSec = Math.round((Date.now() - sessionStartMs) / 1000);
+      bandwidthTracker.report(clickedUrl, actualDurationSec);
       console.log('[BROWSER API] ✓ Session completed successfully (real browser)');
       const logs = sessionLogger.getLogs();
-      return res.json({ success: true, sessionId, clickedUrl, method: 'browser_api_browser', logs });
+      return { success: true, sessionId, clickedUrl, targetUrl: clickedUrl, method: 'browser_api_browser', logs, bandwidthBytes: bandwidthTracker.getTotalBytes(), actualDurationSec };
     }
     
     // ═══════════════════════════════════════════════════════════
@@ -1523,12 +1943,14 @@ app.post('/api/automate', async (req, res) => {
       };
       
       sessionLogger.log('LUNA', 'Initiating Luna Headful Direct navigation', 'info');
-      const result = await navigateWithLunaHeadful(url, geoLocation || 'US', lunaConfig, deviceProfile, extensionPath);
+      const result = await navigateWithLunaHeadful(url, geoLocation || 'US', lunaConfig, deviceProfile, extensionPath, searchKeyword, customReferrer);
       
       if (result.success && result.page) {
         page = result.page;
         browser = result.browser;
         clickedUrl = url;
+        bandwidthTracker.attachToPage(page);
+        // Network guards disabled for CPU optimization
         
         sessionLogger.success('LUNA', 'Browser and page acquired for session continuation');
         
@@ -1558,28 +1980,26 @@ app.post('/api/automate', async (req, res) => {
           }
           sessionLogger.success('JOURNEY', 'Completed');
         } else {
-          // Random browsing behavior
-          const scrolls = Math.floor(Math.random() * 3) + 1;
-          for (let i = 0; i < scrolls; i++) {
-            await page.evaluate(() => window.scrollBy(0, window.innerHeight / 2));
-            await new Promise(r => setTimeout(r, 1000 + Math.random() * 2000));
-          }
-          sessionLogger.log('BEHAVIOR', 'Random browsing simulated', 'success');
+          await maybeMultiPageBrowse(page, clickedUrl, sessionLogger);
         }
         
-        // Session duration
-        const minDuration = (sessionDurationMin || 30) * 1000;
-        const maxDuration = (sessionDurationMax || 120) * 1000;
-        const duration = minDuration + Math.random() * (maxDuration - minDuration);
-        await new Promise(r => setTimeout(r, duration));
+        // Session duration honoring frontend inputs
+        const minSec = sessionDurationMin || 30;
+        const maxSec = sessionDurationMax || 120;
+        const shouldBounce = (bounceRate || 0) > 0 && Math.random() < ((bounceRate || 0) / 100);
+        const durationSec = shouldBounce ? Math.floor(5 + Math.random() * 5) : Math.floor(minSec + Math.random() * (maxSec - minSec));
+        lastPlannedDurationSec = durationSec;
+        await new Promise(r => setTimeout(r, durationSec * 1000));
         
+        const actualDurationSec = Math.round((Date.now() - sessionStartMs) / 1000);
+        bandwidthTracker.report(clickedUrl, actualDurationSec);
         sessionLogger.success('SESSION', 'Completed successfully');
         const logs = sessionLogger.getLogs();
-        return res.json({ success: true, sessionId, clickedUrl, method: 'luna_headful_direct', logs });
+        return { success: true, sessionId, clickedUrl, targetUrl: clickedUrl, method: 'luna_headful_direct', logs, bandwidthBytes: bandwidthTracker.getTotalBytes(), actualDurationSec };
       } else {
         sessionLogger.error('LUNA', `Navigation failed: ${result.error}`);
         const logs = sessionLogger.getLogs();
-        return res.status(500).json({ success: false, error: `Luna Headful Direct failed: ${result.error}`, logs });
+        throw new Error(`Luna Headful Direct failed: ${result.error}`);
       }
     }
     
@@ -1727,8 +2147,9 @@ app.post('/api/automate', async (req, res) => {
     
     // Step 2: Launch final browser for site navigation
     // Download extension if ID provided (before deciding navigation method)
+    // Only download/attach extension for non-direct flows (direct is handled in Luna headful block above)
     let extensionPath = null;
-    if (extensionId) {
+    if (campaignType !== 'direct' && extensionId) {
       try {
         extensionPath = await getExtensionPath(extensionId);
         console.log(`[EXTENSION] Extension ready: ${extensionId} -> ${extensionPath}`);
@@ -1778,11 +2199,16 @@ app.post('/api/automate', async (req, res) => {
       });
       
       page = await browser.newPage();
+      bandwidthTracker.attachToPage(page);
+      try { initLeanResourceGuards(page, new URL(clickedUrl).hostname); } catch {}
       
       // Authenticate proxy with geo-targeting
-      let authUsername = browser_username;
+      let authUsername = browser_username || '';
+      if (!authUsername) {
+        throw new Error('[EXTENSION + PROXY] Missing browser_username for proxy authentication');
+      }
       // Bright Data uses -country-, Luna uses -region-
-      const isLunaProxy = browser_username.includes('admin_') || browser_username.includes('lunaproxy');
+      const isLunaProxy = authUsername.includes('admin_') || authUsername.includes('lunaproxy');
       
       if (isLunaProxy && !authUsername.includes('-region-')) {
         authUsername = `${authUsername}-region-${geoCode.toLowerCase()}`;
@@ -1817,6 +2243,8 @@ app.post('/api/automate', async (req, res) => {
       
       const pages = await browser.pages();
       page = pages[0] || await browser.newPage();
+      bandwidthTracker.attachToPage(page);
+      try { initLeanResourceGuards(page, new URL(clickedUrl).hostname); } catch {}
     } else if (useBrowserAutomation && browser_customer_id && browser_username && browser_password) {
       // Use Browser API for direct navigation (no search, no extension)
       const geoCode = geoLocation ? geoLocation.toUpperCase() : 'US';
@@ -1836,6 +2264,8 @@ app.post('/api/automate', async (req, res) => {
       
       const pages = await browser.pages();
       page = pages[0] || await browser.newPage();
+      bandwidthTracker.attachToPage(page);
+      try { initLeanResourceGuards(page, new URL(clickedUrl).hostname); } catch {}
     } else {
       // Luna Proxy fallback for direct navigation (no extension, no Browser API)
       browser = await puppeteer.launch({
@@ -1854,6 +2284,8 @@ app.post('/api/automate', async (req, res) => {
       });
       
       page = await browser.newPage();
+      bandwidthTracker.attachToPage(page);
+      try { initLeanResourceGuards(page, new URL(clickedUrl).hostname); } catch {}
       
       // Set proxy auth if using Luna Proxy
       if (proxy && proxyUsername && proxyPassword) {
@@ -1891,12 +2323,18 @@ app.post('/api/automate', async (req, res) => {
     console.log(`[NAVIGATE] URL to navigate: ${clickedUrl}`);
     console.log(`[NAVIGATE] Source: ${useLunaProxySearch && searchKeyword ? 'Browser API Search Result' : 'Direct Traffic/Target URL'}`);
     try {
-      await page.goto(clickedUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+      await page.goto(clickedUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      
+      // Wait for GA/GTM scripts to fire after domcontentloaded
+      await new Promise(r => setTimeout(r, 2000));
+      console.log(`[NAVIGATE] ✓ Allowed 2s for GA scripts to fire`);
+      
       const finalUrl = page.url();
       console.log(`[NAVIGATE] ✓ Page loaded successfully`);
       console.log(`[NAVIGATE] Final URL after navigation: ${finalUrl}`);
       if (finalUrl !== clickedUrl) {
         console.log(`[NAVIGATE] ⚠️ URL changed due to redirects: ${clickedUrl} -> ${finalUrl}`);
+
       }
     } catch (err) {
       console.error(`[NAVIGATE] Error navigating to ${clickedUrl}: ${err.message}`);
@@ -1929,40 +2367,72 @@ app.post('/api/automate', async (req, res) => {
       }
       console.log('[JOURNEY] ✓ Completed');
     } else {
-      // Random browsing behavior
-      const scrolls = Math.floor(Math.random() * 3) + 1;
-      for (let i = 0; i < scrolls; i++) {
-        await page.evaluate(() => window.scrollBy(0, window.innerHeight / 2));
-        await new Promise(r => setTimeout(r, 1000 + Math.random() * 2000));
-      }
-      console.log('[BEHAVIOR] ✓ Random browsing simulated');
+      await maybeMultiPageBrowse(page, clickedUrl, sessionLogger);
     }
     
-    // Session duration
-    const minDuration = (sessionDurationMin || 30) * 1000;
-    const maxDuration = (sessionDurationMax || 120) * 1000;
-    const duration = minDuration + Math.random() * (maxDuration - minDuration);
-    await new Promise(r => setTimeout(r, duration));
+    // Session duration honoring frontend inputs
+    const minSec = sessionDurationMin || 30;
+    const maxSec = sessionDurationMax || 120;
+    const shouldBounce = (bounceRate || 0) > 0 && Math.random() < ((bounceRate || 0) / 100);
+    const durationSec = shouldBounce ? Math.floor(5 + Math.random() * 5) : Math.floor(minSec + Math.random() * (maxSec - minSec));
+    lastPlannedDurationSec = durationSec;
+    await new Promise(r => setTimeout(r, durationSec * 1000));
     
+    const actualDurationSec = Math.round((Date.now() - sessionStartMs) / 1000);
+    bandwidthTracker.report(clickedUrl, actualDurationSec);
     console.log('[SESSION] ✓ Completed successfully');
     const logs = sessionLogger.getLogs();
-    res.json({ success: true, sessionId, clickedUrl, logs });
+    return { success: true, sessionId, clickedUrl, targetUrl: clickedUrl, logs, bandwidthBytes: bandwidthTracker.getTotalBytes(), actualDurationSec };
     
   } catch (error) {
     sessionLogger.error('SESSION', error.message);
-    const logs = sessionLogger.getLogs();
     console.error('[ERROR]', error.message);
-    res.status(500).json({ success: false, error: error.message, logs });
+    throw error; // Re-throw for job queue to catch
   } finally {
+    // CRITICAL CLEANUP: Always close browser
     if (browser) {
       try {
         await browser.close();
-        sessionLogger.success('CLEANUP', 'Browser closed successfully');
       } catch (err) {
-        sessionLogger.warning('CLEANUP', `Browser close error: ${err.message}`);
+        console.log('[CLEANUP] Browser close error:', err.message);
       }
     }
   }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// QUEUE-BASED ENDPOINTS
+// ════════════════════════════════════════════════════════════════════════
+
+// Submit job to queue (returns immediately with jobId)
+app.post('/api/automate', async (req, res) => {
+  const jobId = genJobId();
+  JOBS.set(jobId, { status: 'queued', createdAt: Date.now(), sessionId: jobId });
+  QUEUE.push({ jobId, payload: req.body });
+  console.log(`[QUEUE] Job ${jobId} queued (${QUEUE.length} in queue, ${activeSessionCount}/${MAX_CONCURRENT_SESSIONS} active)`);
+  runQueue(); // Try to start immediately if slot available
+  
+  return res.status(202).json({ accepted: true, jobId, status: 'queued', message: 'Job queued for processing' });
+});
+
+// Poll job status/result
+app.get('/api/jobs/:jobId', (req, res) => {
+  const job = JOBS.get(req.params.jobId);
+  if (!job) return res.status(404).json({ success: false, error: 'Job not found' });
+  res.json(job);
+});
+
+// Optional: cancel queued job
+app.delete('/api/jobs/:jobId', (req, res) => {
+  const jobId = req.params.jobId;
+  const idx = QUEUE.findIndex(j => j.jobId === jobId);
+  if (idx >= 0) {
+    QUEUE.splice(idx, 1);
+    JOBS.set(jobId, { status: 'cancelled', finishedAt: Date.now() });
+    console.log(`[QUEUE] Job ${jobId} cancelled`);
+    return res.json({ success: true, message: 'Job cancelled' });
+  }
+  res.status(409).json({ success: false, error: 'Job already running or finished' });
 });
 
 // Test headless: false compatibility for extensions
