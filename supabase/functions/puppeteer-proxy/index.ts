@@ -2,15 +2,16 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 
 const ALB_ENDPOINT = 'http://traffic-tool-alb-681297197.us-east-1.elb.amazonaws.com:3000';
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, {
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      },
+      headers: corsHeaders,
     });
   }
 
@@ -23,6 +24,8 @@ serve(async (req) => {
     const albUrl = `${ALB_ENDPOINT}${path}`;
     
     const body = req.method === 'POST' ? await req.text() : undefined;
+    
+    console.log(`Proxying ${req.method} ${path} to ${albUrl}`);
     
     const response = await fetch(albUrl, {
       method: req.method,
@@ -37,8 +40,8 @@ serve(async (req) => {
     return new Response(data, {
       status: response.status,
       headers: {
+        ...corsHeaders,
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
       },
     });
   } catch (error) {
@@ -48,8 +51,8 @@ serve(async (req) => {
       {
         status: 500,
         headers: {
+          ...corsHeaders,
           'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
         },
       }
     );
