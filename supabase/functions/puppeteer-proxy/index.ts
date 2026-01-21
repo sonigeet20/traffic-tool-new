@@ -1,5 +1,10 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 
+// Allow public calls from the frontend without JWT
+export const config = {
+  verifyJwt: false,
+};
+
 const ALB_ENDPOINT = 'http://traffic-tool-alb-681297197.us-east-1.elb.amazonaws.com:3000';
 
 const corsHeaders = {
