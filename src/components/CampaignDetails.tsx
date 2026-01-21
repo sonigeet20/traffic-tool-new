@@ -5,6 +5,8 @@ import { ArrowLeft, Play, Pause, RefreshCw, Activity, Clock, CheckCircle, XCircl
 import SessionLogs from './SessionLogs';
 import RealtimeLogs from './RealtimeLogs';
 
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
 type Campaign = Database['public']['Tables']['campaigns']['Row'];
 type BotSession = Database['public']['Tables']['bot_sessions']['Row'];
 type PerformanceMetric = Database['public']['Tables']['performance_metrics']['Row'];
@@ -160,7 +162,7 @@ export default function CampaignDetails({ campaign, onBack, onEdit, onRefresh }:
     console.log(`[DEBUG runSession] browserApiConfig exists=${!!browserApiConfig}, campaign.use_luna_proxy_search=${campaign.use_luna_proxy_search}`);
     console.log(`[DEBUG runSession] campaign.proxy_provider=${campaign.proxy_provider}`);
 
-    await (supabase.from('bot_sessions').insert as any)({
+    const { error: insertError } = await (supabase.from('bot_sessions').insert as any)({
       id: sessionId,
       campaign_id: campaign.id,
       status: 'running',
@@ -179,6 +181,12 @@ export default function CampaignDetails({ campaign, onBack, onEdit, onRefresh }:
       google_search_attempted: isSearchTraffic,
       google_search_timestamp: isSearchTraffic ? new Date().toISOString() : null,
     });
+
+    if (insertError) {
+      console.error('[CAMPAIGN] Failed to insert bot_session:', insertError);
+      setExecuting(false);
+      return;
+    }
 
     const payload: any = {
       url: campaign.target_url,
@@ -355,19 +363,40 @@ export default function CampaignDetails({ campaign, onBack, onEdit, onRefresh }:
       });
     }
 
-    fetch('https://pffapmqqswcmndlvkjrs.supabase.co/functions/v1/puppeteer-proxy/api/automate', {
+    const proxyUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/puppeteer-proxy/api/automate`;
+    const proxyHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (supabaseAnonKey) {
+      proxyHeaders['apikey'] = supabaseAnonKey;
+      proxyHeaders['Authorization'] = `Bearer ${supabaseAnonKey}`;
+    }
+
+    fetch(proxyUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: proxyHeaders,
       body: JSON.stringify(payload),
     })
-      .then(response => response.json())
-      .then(data => {
-        if (data.logs) {
-          setSessionLogs(prev => [...prev, ...data.logs.logs]);
-          setLogsExpanded(true); // Auto-expand on new logs
+      .then(async (response) => {
+        const raw = await response.text();
+        let data: any = raw;
+        try {
+          data = JSON.parse(raw);
+        } catch (_) {
+          /* non-JSON response */
+        }
+
+        if (!response.ok) {
+          console.error('[CAMPAIGN] Proxy call failed', { status: response.status, data });
+          return;
+        }
+
+        if (data?.logs?.logs) {
+          setSessionLogs((prev) => [...prev, ...data.logs.logs]);
+          setLogsExpanded(true);
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.error('[CAMPAIGN] Proxy call exception', err);
+      });
   }
 
   async function handleExecute() {

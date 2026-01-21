@@ -19,19 +19,26 @@ serve(async (req) => {
     // Extract the path from the request URL
     const url = new URL(req.url);
     const path = url.pathname.replace('/puppeteer-proxy', '');
+    const pathWithSearch = `${path}${url.search}`;
     
     // Forward the request to ALB
-    const albUrl = `${ALB_ENDPOINT}${path}`;
+    const albUrl = `${ALB_ENDPOINT}${pathWithSearch}`;
     
     const body = req.method === 'POST' ? await req.text() : undefined;
     
     console.log(`Proxying ${req.method} ${path} to ${albUrl}`);
     
+    const forwardHeaders: Record<string, string> = {
+      'Content-Type': req.headers.get('content-type') || 'application/json',
+    };
+    const authHeader = req.headers.get('authorization');
+    const apiKeyHeader = req.headers.get('apikey');
+    if (authHeader) forwardHeaders['Authorization'] = authHeader;
+    if (apiKeyHeader) forwardHeaders['apikey'] = apiKeyHeader;
+
     const response = await fetch(albUrl, {
       method: req.method,
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: forwardHeaders,
       body: body,
     });
 

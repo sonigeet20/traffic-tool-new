@@ -182,6 +182,7 @@ async function executeHourlyBatch(
   
   const extensionCrxUrl = campaign.extension_crx_url;
   const bounceRate = campaign.bounce_rate || 30;
+  const maxBandwidth = Number(campaign.max_bandwidth_mb ?? 0) || 0;
   const sessionDurationMin = (campaign.session_duration_min || 30) * 1000;
   const sessionDurationMax = (campaign.session_duration_max || 120) * 1000;
   const customReferrer = campaign.custom_referrer;
@@ -369,7 +370,7 @@ async function executeHourlyBatch(
       sessionDurationMax: campaign.session_duration_max || 240,
       userId: campaign.user_id,
       campaignType: campaignType, // Add campaign type to payload
-      maxBandwidthMB: campaign.max_bandwidth_mb ?? 0.2,
+      maxBandwidthMB: maxBandwidth,
     };
 
     // Add credentials based on campaign type

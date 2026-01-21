@@ -10,6 +10,8 @@ import LunaProxyConfig from './LunaProxyConfig';
 import { Activity, BarChart3, LogOut, Settings } from 'lucide-react';
 import SerpConfig from './SerpConfig';
 
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
 type Campaign = Database['public']['Tables']['campaigns']['Row'];
 
 type View = 'campaigns' | 'create' | 'details' | 'analytics' | 'settings';
@@ -34,13 +36,15 @@ export default function Dashboard() {
         // Trigger the scheduler
         try {
           const { data: { session } } = await supabase.auth.getSession();
+              const token = session?.access_token || supabaseAnonKey;
           await fetch(
             `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/campaign-scheduler`,
             {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${session?.access_token}`,
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                    ...(supabaseAnonKey ? { apikey: supabaseAnonKey } : {}),
               },
             }
           );
