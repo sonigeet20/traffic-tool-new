@@ -134,6 +134,17 @@ export default function Dashboard() {
             </div>
             <div className="flex items-center gap-3">
               <button
+                onClick={() => setCurrentView('campaigns')}
+                className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2 ${
+                  currentView === 'campaigns'
+                    ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-lg'
+                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                }`}
+              >
+                <Activity className="w-4 h-4" />
+                Dashboard
+              </button>
+              <button
                 onClick={() => setCurrentView('analytics')}
                 className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2 ${
                   currentView === 'analytics'
