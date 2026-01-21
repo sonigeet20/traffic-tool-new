@@ -44,6 +44,7 @@ export default function CampaignsList({
     if (newStatus === 'active') {
       setStartingCampaign(campaign.id);
       try {
+        const { data: { session } } = await supabase.auth.getSession();
         let body: any = { campaignId: campaign.id };
         
         // Get the current user for config
@@ -76,6 +77,7 @@ export default function CampaignsList({
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
+              'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
             },
             body: JSON.stringify(body),
           }
