@@ -2003,6 +2003,10 @@ async function processAutomateJob(reqBody, jobId) {
       };
       
       sessionLogger.log('LUNA', 'Initiating Luna Headful Direct navigation', 'info');
+      await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'info',
+        'Starting Luna Headful Direct navigation',
+        { url, geo: geoLocation }
+      );
       const result = await navigateWithLunaHeadful(url, geoLocation || 'US', lunaConfig, deviceProfile, extensionPath, searchKeyword, customReferrer);
       
       if (result.success && result.page) {
@@ -2013,6 +2017,10 @@ async function processAutomateJob(reqBody, jobId) {
         // Network guards disabled for CPU optimization
         
         sessionLogger.success('LUNA', 'Browser and page acquired for session continuation');
+        await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'info',
+          'Luna Headful navigation completed - page ready',
+          { final_url: clickedUrl }
+        );
         
         // Site analysis on first visit (debug mode only)
         let siteAnalysis = null;
@@ -2054,7 +2062,15 @@ async function processAutomateJob(reqBody, jobId) {
           // Use intelligent navigation with min/max pages and bounce rate
           const minPages = minPagesPerSession || 1;
           const maxPages = maxPagesPerSession || 3;
+          await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'info',
+            `Starting intelligent multi-page navigation (${minPages}-${maxPages} pages)`,
+            { bounce_rate: bounceRate || 0 }
+          );
           await intelligentNavigate(page, siteAnalysis, bounceRate || 0, minPages, maxPages, sessionLogger, siteStructure);
+          await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'info',
+            'Intelligent navigation completed',
+            {}
+          );
         }
         
         // Session duration honoring frontend inputs
