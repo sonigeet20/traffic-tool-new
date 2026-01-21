@@ -24,7 +24,7 @@ Deno.serve(async (req: Request) => {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const puppeteerServerUrl = 'https://traffic-tool-alb-681297197.us-east-1.elb.amazonaws.com:3000';
+    const puppeteerServerUrl = 'http://traffic-tool-alb-681297197.us-east-1.elb.amazonaws.com:3000';
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     console.log('Campaign scheduler triggered at:', new Date().toISOString());

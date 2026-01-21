@@ -355,7 +355,7 @@ export default function CampaignDetails({ campaign, onBack, onEdit, onRefresh }:
       });
     }
 
-    fetch('https://traffic-tool-alb-681297197.us-east-1.elb.amazonaws.com:3000/api/automate', {
+    fetch('https://pffapmqqswcmndlvkjrs.supabase.co/functions/v1/puppeteer-proxy/api/automate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
