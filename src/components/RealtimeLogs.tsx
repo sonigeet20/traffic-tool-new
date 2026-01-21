@@ -61,22 +61,29 @@ export default function RealtimeLogs({ campaignId }: RealtimeLogsProps) {
     const { data: sessions } = await supabase
       .from('bot_sessions')
       .select('id')
-      .eq('campaign_id', campaignId);
+      .eq('campaign_id', campaignId)
+      .order('created_at', { ascending: false });
 
-    if (!sessions || sessions.length === 0) return;
+    if (!sessions || sessions.length === 0) {
+      setLogs([]);
+      return;
+    }
 
     const sessionIds = sessions.map(s => s.id);
 
-    // Load logs for these sessions
+    // Load logs for these sessions (most recent first, then reverse for display)
     const { data: logsData } = await supabase
       .from('session_logs')
       .select('*')
       .in('session_id', sessionIds)
-      .order('log_timestamp', { ascending: true })
+      .order('log_timestamp', { ascending: false })
       .limit(500);
 
     if (logsData) {
-      setLogs(logsData);
+      // Reverse to show oldest first, newest last (for auto-scroll)
+      setLogs(logsData.reverse());
+    } else {
+      setLogs([]);
     }
   }
 
@@ -115,10 +122,6 @@ export default function RealtimeLogs({ campaignId }: RealtimeLogsProps) {
       case 'debug': return 'bg-slate-500/10 border-slate-500/20';
       default: return 'bg-slate-500/10 border-slate-500/20';
     }
-  }
-
-  if (!isExpanded && logs.length === 0) {
-    return null;
   }
 
   return (
