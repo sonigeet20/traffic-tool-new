@@ -6,6 +6,7 @@ import CampaignForm from './CampaignForm';
 import CampaignDetails from './CampaignDetails';
 import AnalyticsDashboard from './AnalyticsDashboard';
 import BrowserApiCredentials from './BrowserApiCredentials';
+import LunaProxyConfig from './LunaProxyConfig';
 import { Activity, Plus, BarChart3, LogOut, Settings } from 'lucide-react';
 import SerpConfig from './SerpConfig';
 
@@ -223,6 +224,10 @@ export default function Dashboard() {
                 http://traffic-tool-alb-681297197.us-east-1.elb.amazonaws.com:3000/api/automate
               </div>
               <p className="text-slate-500 text-xs mt-3">If the ALB changes, update this value in code and redeploy.</p>
+            </div>
+            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6">
+              <h3 className="text-lg font-semibold text-white mb-4">Luna Proxy Configuration</h3>
+              <LunaProxyConfig />
             </div>
             <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6">
               <h3 className="text-lg font-semibold text-white mb-4">Bright Data Browser API</h3>
