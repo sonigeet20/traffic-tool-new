@@ -26,6 +26,7 @@ export default function CampaignDetails({ campaign, onBack, onEdit, onRefresh }:
   const [browserApiConfig, setBrowserApiConfig] = useState<any>(null);
   const [sessionLogs, setSessionLogs] = useState<any[]>([]);
   const [logsExpanded, setLogsExpanded] = useState(false);
+  const [showRealtimeLogs, setShowRealtimeLogs] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -493,6 +494,17 @@ export default function CampaignDetails({ campaign, onBack, onEdit, onRefresh }:
           >
             Edit Campaign
           </button>
+          <button
+            onClick={() => setShowRealtimeLogs(!showRealtimeLogs)}
+            className={`px-4 py-2 font-medium rounded-lg transition-colors flex items-center gap-2 ${
+              showRealtimeLogs
+                ? 'bg-cyan-600 hover:bg-cyan-700 text-white'
+                : 'bg-slate-700 hover:bg-slate-600 text-white'
+            }`}
+          >
+            <Activity className="w-4 h-4" />
+            {showRealtimeLogs ? 'Hide Logs' : 'View Logs'}
+          </button>
         </div>
       </div>
 
@@ -645,7 +657,7 @@ export default function CampaignDetails({ campaign, onBack, onEdit, onRefresh }:
       />
 
       {/* Real-time Logs */}
-      <RealtimeLogs campaignId={campaign.id} />
+      {showRealtimeLogs && <RealtimeLogs campaignId={campaign.id} />}
     </div>
   );
 }
