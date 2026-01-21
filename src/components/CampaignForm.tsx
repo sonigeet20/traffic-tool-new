@@ -179,7 +179,7 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
 
       let campaignId = campaign?.id;
 
-      const sessionsPerHour = totalUsers / distributionPeriodHours;
+      const sessionsPerHour = Math.max(1, Math.ceil(totalUsers / distributionPeriodHours));
 
       console.log('[SAVE DEBUG] Saving campaign with traffic distribution:', trafficSourceDistribution);
 

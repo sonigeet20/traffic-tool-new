@@ -125,7 +125,8 @@ Deno.serve(async (req: Request) => {
           .eq('status', 'completed')
           .gte('completed_at', oneHourAgo);
 
-        const sessionsPerHour = campaign.sessions_per_hour || 10;
+        const sessionsPerHourRaw = campaign.sessions_per_hour || 10;
+        const sessionsPerHour = Math.max(1, Math.ceil(Number(sessionsPerHourRaw)));
         const completedThisHourCount = completedThisHour || 0;
 
         if (completedThisHourCount >= sessionsPerHour) {
