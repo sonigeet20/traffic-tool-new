@@ -1,5 +1,10 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.57.4';
 
+// Allow public invocation from frontend without JWT
+export const config = {
+  verifyJwt: false,
+};
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
