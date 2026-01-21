@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "2.2",
+  "description": "Deploy headful browser configuration to traffic-tool instances",
+  "mainSteps": [
+    {
+      "action": "aws:runShellScript",
+      "name": "deployHeadful",
+      "inputs": {
+        "runCommand": [
+          "#!/bin/bash",
+          "set -e",
+          "echo 'Installing Xvfb...'",
+          "sudo apt-get update -qq",
+          "sudo apt-get install -y xvfb",
+          "",
+          "echo 'Stopping existing pm2 processes...'",
+          "pm2 stop all || true",
+          "pm2 delete all || true",
+          "",
+          "echo 'Killing existing Xvfb...'",
+          "pkill -f 'Xvfb :99' || true",
+          "sleep 2",
+          "",
+          "echo 'Starting Xvfb on display :99...'",
+          "Xvfb :99 -screen 0 1920x1080x24 &",
+          "export DISPLAY=:99",
+          "sleep 3",
+          "",
+          "echo 'Navigating to app directory...'",
+          "cd /opt/traffic-tool || cd /home/ubuntu/traffic-tool || cd ~/traffic-tool",
+          "",
+          "echo 'Pulling latest code...'",
+          "git pull origin main || git pull",
+          "",
+          "echo 'Installing dependencies...'",
+          "npm install --production",
+          "",
+          "echo 'Starting app with DISPLAY=:99...'",
+          "DISPLAY=:99 pm2 start server.cjs --name app --interpreter node",
+          "",
+          "echo 'Configuring pm2 startup...'",
+          "pm2 startup systemd -u $USER --hp $HOME || true",
+          "pm2 save",
+          "",
+          "echo 'Deployment complete!'",
+          "pm2 list"
+        ]
+      }
+    }
+  ]
+}
