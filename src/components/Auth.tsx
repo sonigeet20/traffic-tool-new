@@ -1,13 +1,12 @@
 import { useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { LogIn, UserPlus, Loader2 } from 'lucide-react';
+import { LogIn, Loader2 } from 'lucide-react';
 
 interface AuthProps {
   onAuthenticated: () => void;
 }
 
 export default function Auth({ onAuthenticated }: AuthProps) {
-  const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -19,22 +18,12 @@ export default function Auth({ onAuthenticated }: AuthProps) {
     setError('');
 
     try {
-      if (isSignUp) {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-        });
-        if (error) throw error;
-        alert('Account created! Please sign in.');
-        setIsSignUp(false);
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) throw error;
-        onAuthenticated();
-      }
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) throw error;
+      onAuthenticated();
     } catch (err: any) {
       setError(err.message || 'An error occurred');
     } finally {
@@ -51,7 +40,7 @@ export default function Auth({ onAuthenticated }: AuthProps) {
               Traffic Tester
             </h1>
             <p className="text-slate-400">
-              {isSignUp ? 'Create an account to get started' : 'Sign in to continue'}
+              Sign in to continue
             </p>
           </div>
 
@@ -99,40 +88,18 @@ export default function Auth({ onAuthenticated }: AuthProps) {
               {loading ? (
                 <>
                   <Loader2 className="w-5 h-5 animate-spin" />
-                  {isSignUp ? 'Creating Account...' : 'Signing In...'}
+                  Signing In...
                 </>
               ) : (
                 <>
-                  {isSignUp ? (
-                    <>
-                      <UserPlus className="w-5 h-5" />
-                      Create Account
-                    </>
-                  ) : (
-                    <>
-                      <LogIn className="w-5 h-5" />
-                      Sign In
-                    </>
-                  )}
+                  <LogIn className="w-5 h-5" />
+                  Sign In
                 </>
               )}
             </button>
           </form>
 
-          <div className="mt-6 text-center">
-            <button
-              type="button"
-              onClick={() => {
-                setIsSignUp(!isSignUp);
-                setError('');
-              }}
-              className="text-cyan-400 hover:text-cyan-300 text-sm font-medium transition-colors"
-            >
-              {isSignUp
-                ? 'Already have an account? Sign in'
-                : "Don't have an account? Sign up"}
-            </button>
-          </div>
+
         </div>
       </div>
     </div>

@@ -7,7 +7,7 @@ import CampaignDetails from './CampaignDetails';
 import AnalyticsDashboard from './AnalyticsDashboard';
 import BrowserApiCredentials from './BrowserApiCredentials';
 import LunaProxyConfig from './LunaProxyConfig';
-import { Activity, Plus, BarChart3, LogOut, Settings } from 'lucide-react';
+import { Activity, BarChart3, LogOut, Settings } from 'lucide-react';
 import SerpConfig from './SerpConfig';
 
 type Campaign = Database['public']['Tables']['campaigns']['Row'];
@@ -166,15 +166,6 @@ export default function Dashboard() {
                 <Settings className="w-4 h-4" />
                 Settings
               </button>
-              {currentView !== 'create' && currentView !== 'settings' && (
-                <button
-                  onClick={handleCreateNew}
-                  className="px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-white font-medium rounded-lg transition-all shadow-lg flex items-center gap-2"
-                >
-                  <Plus className="w-4 h-4" />
-                  New Campaign
-                </button>
-              )}
               <button
                 onClick={handleSignOut}
                 className="px-4 py-2 bg-slate-700 text-slate-300 hover:bg-slate-600 rounded-lg font-medium transition-all flex items-center gap-2"
@@ -195,6 +186,7 @@ export default function Dashboard() {
             onViewDetails={handleViewDetails}
             onEdit={handleEditCampaign}
             onRefresh={loadCampaigns}
+            onCreateNew={handleCreateNew}
           />
         )}
 
