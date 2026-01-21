@@ -7,18 +7,13 @@ sleep 30
 
 # Install dependencies
 apt-get update -qq
-apt-get install -y xvfb git nodejs npm
+apt-get install -y xvfb nodejs npm
 
 # Install pm2 globally
 npm install -g pm2
 
-# Clone or pull repository (adjust path/repo as needed)
-cd /opt
-if [ ! -d "traffic-tool" ]; then
-    git clone https://github.com/geet-sketch/traffic-tool.git
-fi
-cd traffic-tool
-git pull origin main
+# Code should already be deployed - navigate to directory
+cd /opt/traffic-tool || cd /home/ubuntu/traffic-tool
 
 # Install app dependencies
 npm install --production

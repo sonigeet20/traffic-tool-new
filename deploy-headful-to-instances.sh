@@ -31,9 +31,8 @@ sleep 3
 # Navigate to app directory
 cd /opt/traffic-tool || cd /home/ubuntu/traffic-tool || cd ~/traffic-tool
 
-# Pull latest changes
-echo "📥 Pulling latest code..."
-git pull origin main || git pull
+# No git pull needed - code already deployed via other means
+echo "📦 Using existing code..."
 
 # Install dependencies if needed
 if [ -f "package.json" ]; then
