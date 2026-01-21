@@ -367,6 +367,10 @@ export default function CampaignDetails({ campaign, onBack, onEdit, onRefresh }:
     payload.campaignType = isSearchTraffic ? 'search' : 'direct';
     console.log('[CAMPAIGN TYPE DEBUG] campaignType set to:', payload.campaignType);
 
+    // Add headless mode from campaign settings
+    payload.headlessMode = campaign.headless_mode || 'true';
+    console.log('[HEADLESS MODE DEBUG] headlessMode set to:', payload.headlessMode);
+
     console.log('[DEBUG PAYLOAD]', {
       searchKeyword: payload.searchKeyword,
       isSearchTraffic: payload.isSearchTraffic,

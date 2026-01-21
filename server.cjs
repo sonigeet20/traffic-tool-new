@@ -1429,7 +1429,7 @@ class SessionLogger {
 // LUNA HEADFUL DIRECT - Direct traffic with extension support
 // ════════════════════════════════════════════════════════════════════════
 
-async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, deviceProfile, extensionPath = null, searchKeyword = null, customReferrer = null) {
+async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, deviceProfile, extensionPath = null, searchKeyword = null, customReferrer = null, headlessModeOverride = null) {
   try {
     const { proxy, proxyUsername, proxyPassword } = lunaConfig;
     
@@ -1466,13 +1466,15 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
     
     console.log(`[LUNA HEADFUL DIRECT] Proxy endpoint: ${proxyHost}:${proxyPort}`);
     
-    // Headless mode: use env var HEADLESS_MODE (true/false/new) or default to true
+    // Headless mode: use request param, then env var HEADLESS_MODE, or default to true
     // true = traditional headless (no window, works everywhere)
     // false = headed mode (requires Xvfb/X11, best for anti-detection)
     // 'new' = new headless mode (Chrome 112+, extension support, no X11 needed)
-    const headlessMode = process.env.HEADLESS_MODE === 'false' ? false : 
-                        process.env.HEADLESS_MODE === 'new' ? 'new' : true;
-    console.log(`[LUNA HEADFUL DIRECT] Headless mode: ${headlessMode}`);
+    const headlessMode = headlessModeOverride !== null ? 
+                        (headlessModeOverride === 'false' ? false : headlessModeOverride === 'new' ? 'new' : true) :
+                        (process.env.HEADLESS_MODE === 'false' ? false : 
+                         process.env.HEADLESS_MODE === 'new' ? 'new' : true);
+    console.log(`[LUNA HEADFUL DIRECT] Headless mode: ${headlessMode} (from ${headlessModeOverride ? 'request' : 'env'})`);
     
     // Build browser args - extension FIRST, then proxy
     const browserArgs = [
@@ -1722,6 +1724,7 @@ async function processAutomateJob(reqBody, jobId) {
   let useBrowserAutomation = reqBody.useBrowserAutomation || false;
   let useSerpApi = reqBody.useSerpApi || false;
   let useLunaHeadfulDirect = reqBody.useLunaHeadfulDirect || false;
+  const headlessMode = reqBody.headlessMode; // 'true', 'false', or 'new'
   const serp_api_token = reqBody.serp_api_token;
   const serp_customer_id = reqBody.serp_customer_id;
   const serp_zone_name = reqBody.serp_zone_name;
@@ -2005,9 +2008,9 @@ async function processAutomateJob(reqBody, jobId) {
       sessionLogger.log('LUNA', 'Initiating Luna Headful Direct navigation', 'info');
       await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'info',
         'Starting Luna Headful Direct navigation',
-        { url, geo: geoLocation }
+        { url, geo: geoLocation, headless_mode: headlessMode }
       );
-      const result = await navigateWithLunaHeadful(url, geoLocation || 'US', lunaConfig, deviceProfile, extensionPath, searchKeyword, customReferrer);
+      const result = await navigateWithLunaHeadful(url, geoLocation || 'US', lunaConfig, deviceProfile, extensionPath, searchKeyword, customReferrer, headlessMode);
       
       if (result.success && result.page) {
         page = result.page;
