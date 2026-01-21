@@ -10,6 +10,11 @@ type Campaign = Database['public']['Tables']['campaigns']['Row'];
 type UserJourney = Database['public']['Tables']['user_journeys']['Row'];
 type BrowserPlugin = Database['public']['Tables']['browser_plugins']['Row'];
 
+interface ProxyProvider {
+  name: string;
+  provider_type: string;
+}
+
 interface CampaignFormProps {
   campaign: Campaign | null;
   onSave: () => void;
@@ -23,14 +28,17 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
   const [totalSessions, setTotalSessions] = useState(10);
   const [concurrentBots, setConcurrentBots] = useState(2);
   const [sessionDurationMin, setSessionDurationMin] = useState(30);
-  const [sessionDurationMax, setSessionDurationMax] = useState(120);
+  const [sessionDurationMax, setSessionDurationMax] = useState(240);
   const [targetGeoLocations, setTargetGeoLocations] = useState<string[]>(['US']);
   const [useResidentialProxies, setUseResidentialProxies] = useState(true);
-  const [proxyProvider, setProxyProvider] = useState('luna');
+  const [proxyProvider, setProxyProvider] = useState('luna-default');
   const [proxyUsername, setProxyUsername] = useState('');
   const [proxyPassword, setProxyPassword] = useState('');
   const [proxyHost, setProxyHost] = useState('pr.lunaproxy.com');
   const [proxyPort, setProxyPort] = useState('12233');
+  const [providers, setProviders] = useState<ProxyProvider[]>([]);
+  const [defaultProviderName, setDefaultProviderName] = useState('');
+  const [lastCampaignId, setLastCampaignId] = useState<string | null>(null);
   const [totalUsers, setTotalUsers] = useState(100);
   const [distributionPeriodHours, setDistributionPeriodHours] = useState(24);
   const [distributionPattern, setDistributionPattern] = useState<'uniform' | 'spike' | 'gradual_increase' | 'random'>('uniform');
@@ -45,6 +53,7 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
   const [maxPagesPerSession, setMaxPagesPerSession] = useState(3);
   const [debugMode, setDebugMode] = useState(false);
   const [customReferrer, setCustomReferrer] = useState('');
+  const [maxBandwidthMB, setMaxBandwidthMB] = useState<number>(0.2);
   const [useSerpApi, setUseSerpApi] = useState(false);
   const [serpApiProvider, setSerpApiProvider] = useState('bright_data');
   const [useBrowserAutomation, setUseBrowserAutomation] = useState(false);
@@ -57,6 +66,29 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
   const [overrideProxySettings, setOverrideProxySettings] = useState(false);
 
   useEffect(() => {
+    loadProvidersFromSettings();
+  }, []);
+
+  async function loadProvidersFromSettings() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const [{ data: settings }, { data: providerRows }] = await Promise.all([
+      supabase.from('settings').select('default_proxy_provider').eq('user_id', user.id).maybeSingle(),
+      supabase.from('proxy_providers').select('name, provider_type').eq('user_id', user.id).eq('enabled', true)
+    ]);
+
+    const providerList = providerRows || [];
+    setProviders(providerList);
+    const fallback = settings?.default_proxy_provider || providerList[0]?.name || 'luna-default';
+    setDefaultProviderName(fallback);
+
+    if (!campaign) {
+      setProxyProvider(fallback);
+    }
+  }
+
+  useEffect(() => {
     if (campaign) {
       console.log('[LOAD DEBUG] Loading campaign:', {
         id: campaign.id,
@@ -67,11 +99,11 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
       setTargetUrl(campaign.target_url);
       setTotalSessions(campaign.total_sessions);
       setConcurrentBots(campaign.concurrent_bots);
-      setSessionDurationMin(campaign.session_duration_min);
-      setSessionDurationMax(campaign.session_duration_max);
+      setSessionDurationMin(campaign.session_duration_min ?? 30);
+      setSessionDurationMax(campaign.session_duration_max ?? 240);
       setTargetGeoLocations(campaign.target_geo_locations || ['US']);
       setUseResidentialProxies(campaign.use_residential_proxies);
-      setProxyProvider(campaign.proxy_provider);
+      setProxyProvider(campaign.proxy_provider || defaultProviderName || 'luna-default');
       setProxyUsername(campaign.proxy_username || '');
       setProxyPassword(campaign.proxy_password || '');
       setProxyHost(campaign.proxy_host || 'pr.lunaproxy.com');
@@ -92,6 +124,7 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
       setSiteStructure(campaign.site_structure || null);
       setDebugMode(campaign.debug_mode || false);
       setCustomReferrer(campaign.custom_referrer || '');
+      setMaxBandwidthMB(campaign.max_bandwidth_mb ?? 0.2);
       setUseSerpApi(campaign.use_serp_api || false);
       setSerpApiProvider(campaign.serp_api_provider || 'bright_data');
       setUseBrowserAutomation(campaign.use_browser_automation || false);
@@ -107,7 +140,8 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
       }
       
       // If campaign has custom proxy credentials, show override
-      setOverrideProxySettings(!!campaign.proxy_username);
+      setOverrideProxySettings(!!campaign.proxy_override_enabled);
+      setLastCampaignId(campaign.id);
       
       loadJourneys(campaign.id);
       loadPlugins(campaign.id);
@@ -145,6 +179,20 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
 
       console.log('[SAVE DEBUG] Saving campaign with traffic distribution:', trafficSourceDistribution);
 
+      const providerToUse = proxyProvider || defaultProviderName || 'luna-default';
+      const overrideEnabled = !!(overrideProxySettings && proxyUsername && proxyPassword);
+      const proxyPayload = overrideEnabled ? {
+        proxy_username: proxyUsername,
+        proxy_password: proxyPassword,
+        proxy_host: proxyHost,
+        proxy_port: proxyPort
+      } : {
+        proxy_username: null,
+        proxy_password: null,
+        proxy_host: null,
+        proxy_port: null
+      };
+
       if (campaign) {
         const updateData = {
           name,
@@ -155,11 +203,9 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
           session_duration_max: sessionDurationMax,
           target_geo_locations: targetGeoLocations,
           use_residential_proxies: useResidentialProxies,
-          proxy_provider: proxyProvider,
-          proxy_username: proxyUsername,
-          proxy_password: proxyPassword,
-          proxy_host: proxyHost,
-          proxy_port: proxyPort,
+          proxy_provider: providerToUse,
+          proxy_override_enabled: overrideEnabled,
+          ...proxyPayload,
           total_users: totalUsers,
           distribution_period_hours: distributionPeriodHours,
           distribution_pattern: distributionPattern,
@@ -172,6 +218,7 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
           search_keywords: searchKeywords,
           extension_crx_url: extensionId || null,
           custom_referrer: customReferrer || null,
+          max_bandwidth_mb: maxBandwidthMB,
           use_serp_api: useSerpApi,
           serp_api_provider: serpApiProvider,
           use_browser_automation: useBrowserAutomation,
@@ -207,11 +254,9 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
             session_duration_max: sessionDurationMax,
             target_geo_locations: targetGeoLocations,
             use_residential_proxies: useResidentialProxies,
-            proxy_provider: proxyProvider,
-            proxy_username: proxyUsername,
-            proxy_password: proxyPassword,
-            proxy_host: proxyHost,
-            proxy_port: proxyPort,
+            proxy_provider: providerToUse,
+            proxy_override_enabled: overrideEnabled,
+            ...proxyPayload,
             total_users: totalUsers,
             distribution_period_hours: distributionPeriodHours,
             distribution_pattern: distributionPattern,
@@ -224,6 +269,7 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
             search_keywords: searchKeywords,
             extension_crx_url: extensionId || null,
             custom_referrer: customReferrer || null,
+            max_bandwidth_mb: maxBandwidthMB,
             use_serp_api: useSerpApi,
             serp_api_provider: serpApiProvider,
             use_browser_automation: useBrowserAutomation,
@@ -481,7 +527,7 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
                     type="number"
                     value={sessionDurationMin}
                     onChange={(e) => setSessionDurationMin(parseInt(e.target.value))}
-                    min="1"
+                    min="30"
                     required
                     className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-cyan-500 transition-colors"
                   />
@@ -495,7 +541,8 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
                     type="number"
                     value={sessionDurationMax}
                     onChange={(e) => setSessionDurationMax(parseInt(e.target.value))}
-                    min="1"
+                    min="30"
+                    max="240"
                     required
                     className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-cyan-500 transition-colors"
                   />
@@ -595,6 +642,28 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
                 </p>
               </div>
 
+              <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4">
+                <label className="block text-sm font-medium text-purple-400 mb-2">
+                  Max Bandwidth Per Session (MB)
+                </label>
+                <input
+                  type="number"
+                  value={maxBandwidthMB}
+                  onChange={(e) => setMaxBandwidthMB(Number(e.target.value))}
+                  min="0.05"
+                  max="5"
+                  step="0.05"
+                  required
+                  className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-purple-500 transition-colors"
+                />
+                <p className="mt-2 text-sm text-purple-300">
+                  Session will automatically stop once this bandwidth limit is reached. Extension loads via server bandwidth (no proxy), then all navigation uses proxies.
+                </p>
+                <p className="mt-1 text-xs text-slate-400">
+                  ⚡ Typical usage: 2-5 MB per session | Heavy sites: 10-20 MB
+                </p>
+              </div>
+
               <div className="bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/30 rounded-xl p-6">
                 <IntelligentTrafficConfig
                   url={targetUrl}
@@ -682,6 +751,31 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
                   >
                     {overrideProxySettings ? '✓ Override Active' : 'Override for This Campaign'}
                   </button>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">Proxy Provider</label>
+                    <select
+                      value={proxyProvider}
+                      onChange={(e) => setProxyProvider(e.target.value)}
+                      className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-cyan-500 transition-colors"
+                    >
+                      {providers.length === 0 && (
+                        <option value={defaultProviderName || 'luna-default'}>
+                          {defaultProviderName || 'luna-default'} (default)
+                        </option>
+                      )}
+                      {providers.map((p) => (
+                        <option key={p.name} value={p.name}>
+                          {p.name} ({p.provider_type})
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Scheduler pulls credentials from the settings table unless override is enabled.
+                    </p>
+                  </div>
                 </div>
 
                 {overrideProxySettings && (

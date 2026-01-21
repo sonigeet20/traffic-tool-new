@@ -1481,8 +1481,9 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
     
     // Set proxy auth if provided
     if (proxyUsername && proxyPassword) {
-      const authUsername = proxyUsername.includes('-region-') 
-        ? proxyUsername 
+      // Ensure geo targeting is always applied: append -region-<geo> if missing
+      const authUsername = proxyUsername.includes('-region-')
+        ? proxyUsername
         : `${proxyUsername}-region-${geoLocation.toLowerCase()}`;
       
       console.log(`[LUNA HEADFUL DIRECT] Setting proxy authentication...`);
@@ -2308,9 +2309,9 @@ async function processAutomateJob(reqBody, jobId) {
       
       // Set proxy auth if using Luna Proxy
       if (proxy && proxyUsername && proxyPassword) {
-        // Luna proxy format: user-admin_X5otK-region-{countrycode}
-        const authUsername = proxyUsername.includes('-region-') 
-          ? proxyUsername 
+        // Always enforce geo targeting: append -region-<geo> when absent
+        const authUsername = proxyUsername.includes('-region-')
+          ? proxyUsername
           : `${proxyUsername}-region-${geoLocation ? geoLocation.toLowerCase() : 'us'}`;
         
         await page.authenticate({

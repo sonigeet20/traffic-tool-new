@@ -489,18 +489,24 @@ app.post('/api/automate', async (req, res) => {
     useSerpApi, proxy_provider,
     serp_api_token, serp_customer_id, serp_zone_name, serp_endpoint, serp_port,
     useBrowserAutomation, browser_customer_id, browser_zone, browser_password,
-    browser_endpoint, browser_port
+    browser_endpoint, browser_port, extensionCrxUrl, customReferrer, maxBandwidthMB
   } = req.body;
 
   console.log(`[SESSION] Starting - Search: ${searchKeyword ? 'Yes' : 'No'}, Target: ${url}`);
   
   let browser;
   let page;
+  let totalBandwidthBytes = 0;
+  const normalizedMaxBandwidthMB = maxBandwidthMB ? Number(maxBandwidthMB) : 0.2; // default ultra-thrifty
+  const maxBandwidthBytes = normalizedMaxBandwidthMB * 1024 * 1024;
   
   try {
     // Generate realistic device profile
     const deviceProfile = generateDeviceProfile(geoLocation || 'US');
     console.log(`[DEVICE] Using: ${deviceProfile.name}`);
+    if (maxBandwidthBytes) {
+      console.log(`[BANDWIDTH] Limit: ${normalizedMaxBandwidthMB} MB`);
+    }
     
     // Step 1: Use SERP API for search (if enabled)
     let clickedUrl = url;
@@ -516,9 +522,9 @@ app.post('/api/automate', async (req, res) => {
         port: serp_port || '33335'
       };
       
-      // Launch temporary browser for SERP search with real device mode
+      // Launch temporary browser for SERP search with real device mode - HEADFUL for extension support
       let serpBrowser = await puppeteer.launch({
-        headless: true,
+        headless: false,
         ignoreHTTPSErrors: true,
         args: [
           '--no-sandbox',
@@ -581,31 +587,90 @@ app.post('/api/automate', async (req, res) => {
       const pages = await browser.pages();
       page = pages[0] || await browser.newPage();
     } else {
-      // Launch local browser with Luna proxy
-      const proxyUrl = proxy && geoLocation ? `${proxy}-country-${geoLocation}` : proxy;
+      // Launch local browser with Luna proxy - HEADFUL for extension support
+      // Step 1: Launch without proxy to load extension using server bandwidth
+      const normalizedGeo = (geoLocation || 'us').toLowerCase();
+      const normalizedProxy = proxy
+        ? (proxy.startsWith('http://') || proxy.startsWith('https://') ? proxy : `http://${proxy}`)
+        : null;
+      
+      console.log('[BROWSER] Launching HEADFUL mode (extension support)');
+      
+      // Launch browser WITHOUT proxy first
       const launchConfig = {
-        headless: true,
+        headless: false,
         ignoreHTTPSErrors: true,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--disable-blink-features=AutomationControlled',
+          '--disable-images',
+          '--blink-settings=imagesEnabled=false',
           `--window-size=${deviceProfile.screenWidth},${deviceProfile.screenHeight}`,
         ]
       };
       
-      if (proxyUrl) {
-        launchConfig.args.push(`--proxy-server=${proxyUrl}`);
+      // Load extension if provided
+      if (extensionCrxUrl) {
+        console.log('[EXTENSION] Loading extension via server bandwidth (no proxy)');
+        launchConfig.args.push(`--disable-extensions-except=/tmp/extension`);
+        launchConfig.args.push(`--load-extension=/tmp/extension`);
       }
       
       browser = await puppeteer.launch(launchConfig);
       page = await browser.newPage();
       
-      // Authenticate proxy
-      if (proxy && proxyUsername && proxyPassword) {
-        await page.authenticate({ username: proxyUsername, password: proxyPassword });
-        console.log('[PROXY] ✓ Authenticated');
+      // Step 2: Now set proxy authentication for actual navigation + aggressive blocking
+      if (normalizedProxy && proxyUsername && proxyPassword) {
+        console.log('[PROXY] Setting up proxy for navigation (extension already loaded)');
+        
+        // Create a new page with CDP session for proxy override
+        const client = await page.target().createCDPSession();
+        await client.send('Network.enable');
+        
+        // Block heavy resource types
+        const blockedTypes = new Set(['Image', 'Media', 'Font', 'Stylesheet']);
+        const blockedPattern = /\.(png|jpg|jpeg|gif|webp|svg|mp4|webm|mov|avi|mkv|mp3|wav|ogg|woff|woff2|ttf|otf|css)(\?|$)/i;
+        const gaAllowlist = ['www.google-analytics.com', 'www.googletagmanager.com', 'stats.g.doubleclick.net'];
+        const hasRegionTag = proxyUsername.includes('-region-');
+        const authUsername = hasRegionTag ? proxyUsername : `${proxyUsername}-region-${normalizedGeo}`;
+        
+        // Set authentication handler
+        await page.authenticate({ username: authUsername, password: proxyPassword });
+        
+        // Enable Fetch interception for proxy header + blocking
+        await client.send('Fetch.enable', {
+          patterns: [{ urlPattern: '*', requestStage: 'Request' }]
+        });
+        
+        client.on('Fetch.requestPaused', async (event) => {
+          const { requestId, request, resourceType } = event;
+          try {
+            // Block unwanted types and heavy assets unless GA allowlist
+            const urlHost = (() => {
+              try { return new URL(request.url).hostname; } catch { return ''; }
+            })();
+            const isGA = gaAllowlist.includes(urlHost);
+            const isBlockedType = blockedTypes.has(resourceType);
+            const isBlockedByPattern = blockedPattern.test(request.url);
+            if (!isGA && (isBlockedType || isBlockedByPattern)) {
+              await client.send('Fetch.failRequest', { requestId, errorReason: 'Aborted' });
+              return;
+            }
+            await client.send('Fetch.continueRequest', {
+              requestId,
+              headers: [
+                ...Object.entries(request.headers).map(([name, value]) => ({ name, value })),
+                { name: 'Proxy-Authorization', value: `Basic ${Buffer.from(`${authUsername}:${proxyPassword}`).toString('base64')}` }
+              ]
+            });
+          } catch (e) {
+            console.log('[PROXY] Request continue error:', e.message);
+          }
+        });
+        
+        console.log(hasRegionTag ? '[PROXY] ✓ Authenticated' : '[PROXY] ✓ Authenticated (region appended)');
       }
     }
     
@@ -618,10 +683,41 @@ app.post('/api/automate', async (req, res) => {
     const cookies = loadOrCreateCookies(proxyIdentifier);
     await page.setCookie(...cookies);
     
+    // Set custom referrer if provided
+    if (customReferrer) {
+      await page.setExtraHTTPHeaders({ 'Referer': customReferrer });
+      console.log(`[REFERRER] Set to: ${customReferrer}`);
+    }
+    
+    // Enable bandwidth tracking if limit is set
+    if (maxBandwidthBytes) {
+      const client = await page.target().createCDPSession();
+      await client.send('Network.enable');
+      
+      client.on('Network.responseReceived', (params) => {
+        const response = params.response;
+        if (response.encodedDataLength) {
+          totalBandwidthBytes += response.encodedDataLength;
+        }
+      });
+      
+      client.on('Network.dataReceived', (params) => {
+        totalBandwidthBytes += params.dataLength;
+        if (totalBandwidthBytes > maxBandwidthBytes) {
+          console.log(`[BANDWIDTH] ⚠️ Stopping - limit reached (${(totalBandwidthBytes / 1024 / 1024).toFixed(2)} MB / ${normalizedMaxBandwidthMB} MB)`);
+          page.close().catch(() => {});
+        }
+      });
+    }
+    
     // Navigate to target URL
     console.log(`[NAVIGATE] Going to: ${clickedUrl}`);
     await page.goto(clickedUrl, { waitUntil: 'networkidle2', timeout: 60000 });
     console.log('[NAVIGATE] ✓ Page loaded');
+    
+    if (maxBandwidthBytes) {
+      console.log(`[BANDWIDTH] Used: ${(totalBandwidthBytes / 1024 / 1024).toFixed(2)} MB / ${normalizedMaxBandwidthMB} MB`);
+    }
     
     // Execute user journey or random behavior
     if (userJourney && userJourney.length > 0) {

@@ -6,6 +6,16 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info, Apikey',
 };
 
+const ensureHttpProxy = (proxy: string | null | undefined): string | null => {
+  if (!proxy) return null;
+  return proxy.startsWith('http://') || proxy.startsWith('https://') ? proxy : `http://${proxy}`;
+};
+
+const ensureRegionInUsername = (username: string | null | undefined, region: string | null): string | null => {
+  if (!username || !region) return username || null;
+  return username.includes('-region-') ? username : `${username}-region-${region.toLowerCase()}`;
+};
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 200, headers: corsHeaders });
@@ -223,17 +233,63 @@ async function executeHourlyBatch(
       return; // Cannot proceed without Browser API for search campaigns
     }
   } else {
-    // Direct campaigns use Luna Proxy exclusively
-    if (campaign.proxy_username && campaign.proxy_password) {
+    // Direct campaigns prefer settings/default providers unless campaign override is enabled
+    const overrideEnabled = !!campaign.proxy_override_enabled && campaign.proxy_username && campaign.proxy_password;
+
+    if (overrideEnabled) {
+      const proxyHost = campaign.proxy_host || 'pr-new.lunaproxy.com';
+      const proxyPort = campaign.proxy_port || '12233';
       lunaProxyConfig = {
-        proxy: `http://${campaign.proxy_host || 'pr.lunaproxy.com'}:${campaign.proxy_port || '12233'}`,
+        proxy: ensureHttpProxy(`${proxyHost}:${proxyPort}`) || `http://${proxyHost}:${proxyPort}`,
         proxyUsername: campaign.proxy_username,
-        proxyPassword: campaign.proxy_password
+        proxyPassword: campaign.proxy_password,
+        providerType: campaign.proxy_provider || 'luna',
+        providerName: campaign.proxy_provider || 'campaign-override'
       };
-      console.log(`[SCHEDULER] ✓ Direct Campaign - Luna Proxy: ${campaign.proxy_host}`);
+      console.log(`[SCHEDULER] ✓ Direct Campaign Override - Provider: ${lunaProxyConfig.providerName}`);
     } else {
-      console.error(`[SCHEDULER] ✗ Direct campaign ${campaign.id} missing Luna proxy credentials`);
-      return; // Cannot proceed without Luna credentials for direct campaigns
+      const { data: settings } = await supabase
+        .from('settings')
+        .select('*')
+        .eq('user_id', campaign.user_id)
+        .maybeSingle();
+
+      const { data: providerRows } = await supabase
+        .from('proxy_providers')
+        .select('*')
+        .eq('user_id', campaign.user_id)
+        .eq('enabled', true);
+
+      const providers = providerRows || [];
+      const providerName = campaign.proxy_provider || settings?.default_proxy_provider || (providers[0]?.name ?? null);
+      const selectedProvider = providers.find((p) => p.name === providerName) || providers[0] || null;
+
+      if (selectedProvider) {
+        const proxyHost = selectedProvider.host || 'pr-new.lunaproxy.com';
+        const proxyPort = selectedProvider.port || '12233';
+        lunaProxyConfig = {
+          proxy: ensureHttpProxy(`${proxyHost}:${proxyPort}`) || `http://${proxyHost}:${proxyPort}`,
+          proxyUsername: selectedProvider.username,
+          proxyPassword: selectedProvider.password,
+          providerType: selectedProvider.provider_type || 'luna',
+          providerName: selectedProvider.name
+        };
+        console.log(`[SCHEDULER] ✓ Direct Campaign - Provider: ${selectedProvider.name} (${selectedProvider.provider_type})`);
+      } else if (settings?.luna_proxy_username && settings?.luna_proxy_password && settings?.luna_proxy_enabled !== false) {
+        const proxyHost = settings.luna_proxy_host || 'pr-new.lunaproxy.com';
+        const proxyPort = settings.luna_proxy_port || '12233';
+        lunaProxyConfig = {
+          proxy: ensureHttpProxy(`${proxyHost}:${proxyPort}`) || `http://${proxyHost}:${proxyPort}`,
+          proxyUsername: settings.luna_proxy_username,
+          proxyPassword: settings.luna_proxy_password,
+          providerType: 'luna',
+          providerName: 'settings-luna-default'
+        };
+        console.log(`[SCHEDULER] ✓ Direct Campaign - Settings default (legacy Luna)`);
+      } else {
+        console.error(`[SCHEDULER] ✗ Direct campaign ${campaign.id} missing proxy credentials (no override, no settings/default provider)`);
+        return; // Cannot proceed without proxy credentials for direct campaigns
+      }
     }
   }
 
@@ -248,6 +304,7 @@ async function executeHourlyBatch(
   for (let i = 0; i < sessionsToRun; i++) {
     const sessionId = crypto.randomUUID();
     const geoLocation = targetGeoLocations[Math.floor(Math.random() * targetGeoLocations.length)];
+    const geoCode = getGeoCode(geoLocation);
     
     // Traffic source is determined by campaign type
     const trafficSource = campaignType; // 'search' or 'direct'
@@ -304,9 +361,10 @@ async function executeHourlyBatch(
       supabaseKey: Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'),
       customReferrer: customReferrer || null,
       sessionDurationMin: campaign.session_duration_min || 30,
-      sessionDurationMax: campaign.session_duration_max || 120,
+      sessionDurationMax: campaign.session_duration_max || 240,
       userId: campaign.user_id,
       campaignType: campaignType, // Add campaign type to payload
+      maxBandwidthMB: campaign.max_bandwidth_mb ?? 0.2,
     };
 
     // Add credentials based on campaign type
@@ -322,11 +380,16 @@ async function executeHourlyBatch(
       
       console.log(`[SCHEDULER] Session ${sessionId.substring(0, 8)} - Search campaign via Browser API (keyword: ${searchKeyword})`);
     } else if (campaignType === 'direct' && lunaProxyConfig) {
+      const proxyUsername = lunaProxyConfig.providerType === 'luna'
+        ? ensureRegionInUsername(lunaProxyConfig.proxyUsername, geoCode)
+        : lunaProxyConfig.proxyUsername;
+
       requestPayload.proxy = lunaProxyConfig.proxy;
-      requestPayload.proxyUsername = lunaProxyConfig.proxyUsername;
+      requestPayload.proxyUsername = proxyUsername;
       requestPayload.proxyPassword = lunaProxyConfig.proxyPassword;
+      requestPayload.proxyProvider = lunaProxyConfig.providerName || lunaProxyConfig.providerType;
       
-      console.log(`[SCHEDULER] Session ${sessionId.substring(0, 8)} - Direct campaign via Luna Proxy`);
+      console.log(`[SCHEDULER] Session ${sessionId.substring(0, 8)} - Direct campaign via ${lunaProxyConfig.providerName || lunaProxyConfig.providerType || 'proxy'} (${geoCode})`);
     }
 
     fetch(`${puppeteerServerUrl}/api/automate`, {

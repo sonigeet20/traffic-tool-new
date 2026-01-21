@@ -17,21 +17,40 @@ CREATE TABLE IF NOT EXISTS settings (
 ALTER TABLE settings ENABLE ROW LEVEL SECURITY;
 
 -- Create policies
-CREATE POLICY "Users can view their own settings"
-  ON settings FOR SELECT
-  USING (auth.uid() = user_id);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'settings' AND policyname = 'Users can view their own settings'
+  ) THEN
+    CREATE POLICY "Users can view their own settings"
+      ON settings FOR SELECT
+      USING (auth.uid() = user_id);
+  END IF;
 
-CREATE POLICY "Users can insert their own settings"
-  ON settings FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'settings' AND policyname = 'Users can insert their own settings'
+  ) THEN
+    CREATE POLICY "Users can insert their own settings"
+      ON settings FOR INSERT
+      WITH CHECK (auth.uid() = user_id);
+  END IF;
 
-CREATE POLICY "Users can update their own settings"
-  ON settings FOR UPDATE
-  USING (auth.uid() = user_id);
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'settings' AND policyname = 'Users can update their own settings'
+  ) THEN
+    CREATE POLICY "Users can update their own settings"
+      ON settings FOR UPDATE
+      USING (auth.uid() = user_id);
+  END IF;
 
-CREATE POLICY "Users can delete their own settings"
-  ON settings FOR DELETE
-  USING (auth.uid() = user_id);
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'settings' AND policyname = 'Users can delete their own settings'
+  ) THEN
+    CREATE POLICY "Users can delete their own settings"
+      ON settings FOR DELETE
+      USING (auth.uid() = user_id);
+  END IF;
+END $$;
 
 -- Insert default settings for existing users
 INSERT INTO settings (user_id, backend_endpoint)

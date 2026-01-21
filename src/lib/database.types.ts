@@ -25,6 +25,7 @@ type CampaignRow = {
 	proxy_password: Nullable<string>;
 	proxy_host: Nullable<string>;
 	proxy_port: Nullable<string>;
+	proxy_override_enabled?: Nullable<boolean>;
 	total_users: number;
 	distribution_period_hours: number;
 	distribution_pattern: Nullable<string>;
@@ -43,6 +44,35 @@ type CampaignRow = {
 	use_browser_automation?: Nullable<boolean>;
 	use_luna_proxy_search?: Nullable<boolean>;
 	campaign_type?: Nullable<'direct' | 'search'>;
+};
+
+type SettingsRow = {
+	id: string;
+	user_id: Nullable<string>;
+	backend_endpoint: string;
+	luna_proxy_username: Nullable<string>;
+	luna_proxy_password: Nullable<string>;
+	luna_proxy_host: Nullable<string>;
+	luna_proxy_port: Nullable<string>;
+	luna_proxy_enabled: Nullable<boolean>;
+	default_proxy_provider: Nullable<string>;
+	created_at?: Nullable<string>;
+	updated_at?: Nullable<string>;
+};
+
+type ProxyProviderRow = {
+	id: string;
+	user_id: string;
+	name: string;
+	provider_type: string;
+	username: Nullable<string>;
+	password: Nullable<string>;
+	host: Nullable<string>;
+	port: Nullable<string>;
+	enabled: Nullable<boolean>;
+	extra_config: Nullable<Json>;
+	created_at?: Nullable<string>;
+	updated_at?: Nullable<string>;
 };
 
 type UserJourneyRow = {
@@ -162,6 +192,16 @@ type SerpConfigRow = {
 				Row: SerpConfigRow;
 				Insert: Partial<SerpConfigRow>;
 				Update: Partial<SerpConfigRow>;
+			};
+			settings: {
+				Row: SettingsRow;
+				Insert: Partial<SettingsRow>;
+				Update: Partial<SettingsRow>;
+			};
+			proxy_providers: {
+				Row: ProxyProviderRow;
+				Insert: Partial<ProxyProviderRow>;
+				Update: Partial<ProxyProviderRow>;
 			};
 		};
 	};
