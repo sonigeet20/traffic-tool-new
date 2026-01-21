@@ -101,8 +101,6 @@ type BotSessionRow = {
 	campaign_id: string;
 	status: string;
 	user_agent: Nullable<string>;
-	viewport_width: Nullable<number>;
-	viewport_height: Nullable<number>;
 	geo_location: Nullable<string>;
 	proxy_ip: Nullable<string>;
 	proxy_type: Nullable<string>;

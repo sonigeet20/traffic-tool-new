@@ -167,8 +167,6 @@ export default function CampaignDetails({ campaign, onBack, onEdit, onRefresh }:
       campaign_id: campaign.id,
       status: 'running',
       user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      viewport_width: 1920,
-      viewport_height: 1080,
       geo_location: geoLocation,
       proxy_ip: campaign.use_residential_proxies ? 'Luna Proxy' : 'None',
       proxy_type: campaign.use_residential_proxies ? 'residential' : 'none',
