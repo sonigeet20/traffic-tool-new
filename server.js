@@ -353,6 +353,12 @@ function initLeanResourceGuards(page, mainHost, maxBandwidthKB = 300) {
 
       // Allow minimal same-origin scripts for click handlers
       if (type === 'script') {
+        // ALWAYS allow ALL analytics scripts (Google Analytics, GTM, etc.) - priority requirement
+        if (isAnalytics(url)) {
+          console.log(`[ANALYTICS] Allowing analytics script: ${url.substring(0, 80)}...`);
+          return req.continue();
+        }
+        
         if (host === mainHost) {
           if (sameOriginScriptCount < MAX_SAME_ORIGIN_SCRIPTS) {
             sameOriginScriptCount++;
@@ -361,17 +367,16 @@ function initLeanResourceGuards(page, mainHost, maxBandwidthKB = 300) {
           }
           return req.abort();
         }
-        // Only allow core analytics scripts (GA, GTM)
-        if (isAnalytics(url) && (url.includes('gtag') || url.includes('analytics.js') || url.includes('gtm.js'))) {
-          return req.continue();
-        }
         return req.abort();
       }
 
-      // Allow analytics beacons (small XHR/fetch)
+      // Allow analytics beacons and data calls (priority requirement for analytics tracking)
       if (type === 'xhr' || type === 'fetch') {
+        if (isAnalytics(url)) {
+          console.log(`[ANALYTICS] Allowing analytics beacon: ${url.substring(0, 80)}...`);
+          return req.continue();
+        }
         if (host === mainHost) return req.abort(); // Block same-origin data calls
-        if (isAnalytics(url)) return req.continue(); // Allow tracker beacons
         return req.abort();
       }
 
