@@ -1773,6 +1773,22 @@ async function processAutomateJob(reqBody, jobId) {
   // Prefer request-supplied token, else fall back to environment default
   const effectiveBrowserApiToken = browser_api_token || FALLBACK_BROWSER_API_TOKEN;
 
+    // Intelligent bandwidth-aware route planning
+    // Estimate: average page with resource guards = ~300KB
+    // With resource guards blocking heavy assets, pages typically use 200-400KB
+    let calculatedMaxPages = maxPagesPerSession;
+    if (maxBandwidthKB && !debugMode) {
+      // Pre-calculate max pages based on bandwidth budget
+      const AVG_PAGE_BANDWIDTH_KB = 300; // Conservative estimate with resource guards
+      const bandwidthBasedMaxPages = Math.floor(maxBandwidthKB / AVG_PAGE_BANDWIDTH_KB);
+      
+      if (bandwidthBasedMaxPages < calculatedMaxPages) {
+        calculatedMaxPages = Math.max(1, bandwidthBasedMaxPages); // At least 1 page
+        console.log(`[BANDWIDTH PLANNING] Limiting to ${calculatedMaxPages} pages based on ${maxBandwidthKB}KB budget (${AVG_PAGE_BANDWIDTH_KB}KB per page estimate)`);
+        sessionLogger.log('BANDWIDTH', `Pre-calculated route: ${calculatedMaxPages} pages max for ${maxBandwidthKB}KB budget`, 'info');
+      }
+    }
+
     const deviceProfile = generateDeviceProfile(geoLocation || 'US');
     sessionLogger.log('SESSION', `Campaign Type: ${campaignType}, Target: ${url}`, 'info');
     sessionLogger.log('DEVICE', `Using: ${deviceProfile.name}`, 'info');
@@ -2002,7 +2018,7 @@ async function processAutomateJob(reqBody, jobId) {
       } else {
         // Use intelligent navigation with min/max pages and bounce rate
         const minPages = minPagesPerSession || 1;
-        const maxPages = maxPagesPerSession || 3;
+        const maxPages = calculatedMaxPages || maxPagesPerSession || 3; // Use bandwidth-aware limit
         await intelligentNavigate(page, null, bounceRate || 0, minPages, maxPages, sessionLogger, siteStructure);
       }
 
@@ -2103,7 +2119,7 @@ async function processAutomateJob(reqBody, jobId) {
         } else {
           // Use intelligent navigation with min/max pages and bounce rate
           const minPages = minPagesPerSession || 1;
-          const maxPages = maxPagesPerSession || 3;
+          const maxPages = calculatedMaxPages || maxPagesPerSession || 3; // Use bandwidth-aware limit
           await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'info',
             `Starting intelligent multi-page navigation (${minPages}-${maxPages} pages)`,
             { bounce_rate: bounceRate || 0 }
