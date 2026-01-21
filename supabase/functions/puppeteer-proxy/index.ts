@@ -43,6 +43,21 @@ serve(async (req) => {
     });
 
     const data = await response.text();
+
+    if (!response.ok) {
+      console.error('[proxy] Upstream error', {
+        status: response.status,
+        albUrl,
+        body: data?.slice(0, 500),
+      });
+      return new Response(data || JSON.stringify({ error: 'Upstream error', status: response.status }), {
+        status: response.status,
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'application/json',
+        },
+      });
+    }
     
     return new Response(data, {
       status: response.status,
@@ -53,8 +68,9 @@ serve(async (req) => {
     });
   } catch (error) {
     console.error('Proxy error:', error);
+    const message = (error as Error)?.message || 'Unknown error';
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: message }),
       {
         status: 500,
         headers: {
