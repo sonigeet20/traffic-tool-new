@@ -223,15 +223,31 @@ const DEVICE_PROFILES = {
 const deviceProfileCache = {};
 
 // Lightweight bandwidth tracker (response headers only)
-function createBandwidthTracker(sessionLogger) {
+function createBandwidthTracker(sessionLogger, maxBandwidthKB = null) {
   let totalBytes = 0;
+  const maxBytes = maxBandwidthKB ? maxBandwidthKB * 1024 : null; // Convert KB to bytes
+  let limitExceeded = false;
+  
   const onResponse = (response) => {
     try {
       const headers = response.headers() || {};
       const len = headers['content-length'] || headers['Content-Length'];
       if (len) {
         const parsed = parseInt(len, 10);
-        if (!Number.isNaN(parsed)) totalBytes += parsed;
+        if (!Number.isNaN(parsed)) {
+          totalBytes += parsed;
+          
+          // Check if bandwidth limit exceeded
+          if (maxBytes && !limitExceeded && totalBytes > maxBytes) {
+            limitExceeded = true;
+            const kb = (totalBytes / 1024).toFixed(2);
+            const limitKb = (maxBytes / 1024).toFixed(2);
+            console.log(`[BANDWIDTH] Limit exceeded: ${kb} KB / ${limitKb} KB`);
+            if (sessionLogger && sessionLogger.warning) {
+              sessionLogger.warning('BANDWIDTH', `Bandwidth limit exceeded: ${kb} KB / ${limitKb} KB`);
+            }
+          }
+        }
       }
     } catch (_) {
       // ignore parsing issues
@@ -254,9 +270,9 @@ function createBandwidthTracker(sessionLogger) {
   return { attachToPage, getTotalBytes, report };
 }
 
-// Ultra-lean resource guards: 300KB hard limit + click/nav support
-function initLeanResourceGuards(page, mainHost) {
-  const BANDWIDTH_LIMIT = 300 * 1024; // 300KB hard limit
+// Ultra-lean resource guards: configurable bandwidth limit + click/nav support
+function initLeanResourceGuards(page, mainHost, maxBandwidthKB = 300) {
+  const BANDWIDTH_LIMIT = maxBandwidthKB * 1024; // Convert KB to bytes
   let totalBytes = 0;
   let limitReached = false;
   let sameOriginScriptCount = 0;
@@ -294,7 +310,9 @@ function initLeanResourceGuards(page, mainHost) {
           totalBytes += bytes;
           if (totalBytes > BANDWIDTH_LIMIT) {
             limitReached = true;
-            console.log(`[BANDWIDTH] 300KB hard limit exceeded (${totalBytes} bytes)`);
+            const kb = (totalBytes / 1024).toFixed(2);
+            const limitKb = (BANDWIDTH_LIMIT / 1024).toFixed(2);
+            console.log(`[BANDWIDTH] ${limitKb}KB limit exceeded (${kb} KB used)`);
           }
         }
       }
@@ -1557,7 +1575,7 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
     // Attach lean resource guards to reduce bandwidth while preserving analytics
     try {
       const host = new URL(targetUrl).hostname;
-      initLeanResourceGuards(lunaDirectPage, host);
+      initLeanResourceGuards(lunaDirectPage, host, maxBandwidthKB);
       console.log(`[LUNA HEADFUL DIRECT] ✓ Lean resource guards attached for host: ${host}`);
     } catch (err) {
       console.log(`[LUNA HEADFUL DIRECT] Resource guards attach failed: ${err.message}`);
@@ -1676,9 +1694,10 @@ async function processAutomateJob(reqBody, jobId) {
   
   // Use debug-mode bandwidth tracker if debugMode enabled, otherwise use standard tracker
   const debugMode = reqBody.debugMode || false;
+  const maxBandwidthKB = reqBody.maxBandwidthKB; // Extract bandwidth limit early for tracker
   const bandwidthTracker = debugMode 
     ? createDebugBandwidthTracker(sessionLogger, debugMode)
-    : createBandwidthTracker(sessionLogger);
+    : createBandwidthTracker(sessionLogger, maxBandwidthKB);
 
   let browser;
   let page;
@@ -1725,6 +1744,7 @@ async function processAutomateJob(reqBody, jobId) {
   let useSerpApi = reqBody.useSerpApi || false;
   let useLunaHeadfulDirect = reqBody.useLunaHeadfulDirect || false;
   const headlessMode = reqBody.headlessMode; // 'true', 'false', or 'new'
+  const maxBandwidthKB = reqBody.maxBandwidthKB; // Maximum bandwidth in KB
   const serp_api_token = reqBody.serp_api_token;
   const serp_customer_id = reqBody.serp_customer_id;
   const serp_zone_name = reqBody.serp_zone_name;
@@ -1916,7 +1936,7 @@ async function processAutomateJob(reqBody, jobId) {
 
       page = await browser.newPage();
       bandwidthTracker.attachToPage(page);
-      try { initLeanResourceGuards(page, new URL(clickedUrl).hostname); } catch {}
+      try { initLeanResourceGuards(page, new URL(clickedUrl).hostname, maxBandwidthKB); } catch {}
       
       // Set proxy authentication with geo-targeting
       await page.authenticate({
@@ -2293,7 +2313,7 @@ async function processAutomateJob(reqBody, jobId) {
       
       page = await browser.newPage();
       bandwidthTracker.attachToPage(page);
-      try { initLeanResourceGuards(page, new URL(clickedUrl).hostname); } catch {}
+      try { initLeanResourceGuards(page, new URL(clickedUrl).hostname, maxBandwidthKB); } catch {}
       
       // Authenticate proxy with geo-targeting
       let authUsername = browser_username || '';
@@ -2337,7 +2357,7 @@ async function processAutomateJob(reqBody, jobId) {
       const pages = await browser.pages();
       page = pages[0] || await browser.newPage();
       bandwidthTracker.attachToPage(page);
-      try { initLeanResourceGuards(page, new URL(clickedUrl).hostname); } catch {}
+      try { initLeanResourceGuards(page, new URL(clickedUrl).hostname, maxBandwidthKB); } catch {}
     } else if (useBrowserAutomation && browser_customer_id && browser_username && browser_password) {
       // Use Browser API for direct navigation (no search, no extension)
       const geoCode = geoLocation ? geoLocation.toUpperCase() : 'US';
@@ -2358,7 +2378,7 @@ async function processAutomateJob(reqBody, jobId) {
       const pages = await browser.pages();
       page = pages[0] || await browser.newPage();
       bandwidthTracker.attachToPage(page);
-      try { initLeanResourceGuards(page, new URL(clickedUrl).hostname); } catch {}
+      try { initLeanResourceGuards(page, new URL(clickedUrl).hostname, maxBandwidthKB); } catch {}
     } else {
       // Luna Proxy fallback for direct navigation (no extension, no Browser API)
       browser = await puppeteer.launch({
@@ -2378,7 +2398,7 @@ async function processAutomateJob(reqBody, jobId) {
       
       page = await browser.newPage();
       bandwidthTracker.attachToPage(page);
-      try { initLeanResourceGuards(page, new URL(clickedUrl).hostname); } catch {}
+      try { initLeanResourceGuards(page, new URL(clickedUrl).hostname, maxBandwidthKB); } catch {}
       
       // Set proxy auth if using Luna Proxy
       if (proxy && proxyUsername && proxyPassword) {
