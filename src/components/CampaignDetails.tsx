@@ -344,7 +344,7 @@ export default function CampaignDetails({ campaign, onBack, onEdit, onRefresh }:
       geoLocation: payload.geoLocation
     });
 
-    fetch('http://13.218.100.97:3000/api/automate', {
+    fetch('http://traffic-tool-alb-681297197.us-east-1.elb.amazonaws.com:3000/api/automate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

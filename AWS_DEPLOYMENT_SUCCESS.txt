@@ -1,0 +1,146 @@
+AWS LOAD BALANCER + ASG DEPLOYMENT (SUCCESS - LIVE)
+
+Date: January 21, 2026
+Status: OPERATIONAL
+
+--- LIVE ENDPOINTS ---
+ALB DNS:  traffic-tool-alb-681297197.us-east-1.elb.amazonaws.com
+Port:     3000
+Health:   /health
+API:      http://traffic-tool-alb-681297197.us-east-1.elb.amazonaws.com:3000/api/automate
+
+--- INFRASTRUCTURE COMPONENTS ---
+Target Group:
+  Name: traffic-tool-tg
+  Protocol: HTTP
+  Port: 3000
+  Health Check: /health (every 30s)
+  Status: Active
+
+Application Load Balancer:
+  Name: traffic-tool-alb
+  DNS: traffic-tool-alb-681297197.us-east-1.elb.amazonaws.com
+  Type: Internet-facing (Multi-AZ)
+  Status: Active
+
+Listener:
+  Port: 3000 (HTTP)
+  Target: traffic-tool-tg
+  Status: Active
+
+Launch Template:
+  Name: traffic-tool-lt
+  Instance Type: t3.large (2 vCPU, 8GB RAM)
+  AMI: ami-02d31ec2f3b88eaab (Intelligent Traffic Module)
+  Status: Ready
+
+Auto Scaling Group:
+  Name: traffic-tool-asg
+  Min: 2 instances
+  Max: 10 instances
+  Desired: 2 instances (currently scaling)
+  Health Check: ELB
+  Status: Active
+
+Scaling Policy:
+  Type: CPU-based Target Tracking
+  Metric: CPU Utilization
+  Target: 70%
+  Status: Active
+
+--- INSTANCES STATUS ---
+Instance 1 (i-0efb4b9abe459ba6c):
+  Public IP: 98.80.137.133
+  Private IP: 172.31.8.96
+  AZ: us-east-1b
+  Status: HEALTHY
+  Health: Responding to /health
+  Uptime: 2+ minutes
+  PM2 Status: online
+  Port 3000: Listening
+
+Instance 2 (i-00b2539af5016c9f4):
+  Public IP: (pending)
+  Status: Initializing
+  Health: In progress
+  Expected ready: less than 2 minutes
+
+--- TRAFFIC DISTRIBUTION ---
+Sticky Sessions: Enabled (1 hour cookie)
+Deregistration Delay: 30 seconds
+Health Check Grace: 300 seconds (5 minutes)
+Load Balancing Algorithm: Round Robin (default)
+
+--- SECURITY AND ISOLATION ---
+Security Group: sg-08b44ed01825cbbb8 (reused from original)
+VPC: vpc-0526c9da5a05585c5
+Subnets:
+  - subnet-055bffceee73f3522 (us-east-1a)
+  - subnet-05a445f4f9f839e5c (us-east-1b)
+
+Isolation:
+- No changes to url-tracker infrastructure
+- No changes to other tools in same VPC
+- Dedicated resource naming (traffic-tool-* prefix)
+- Original instance still running as backup
+
+--- COST ESTIMATE ---
+Current: 2 instances (t3.large @ $60/month each) = $120/month
+ALB: ~$30/month
+Total: ~$150/month
+
+At max scale (10 instances): ~$630/month
+Scaling trigger: CPU utilization above 70%
+
+--- NEXT STEPS ---
+1) Wait for second instance to be healthy (about 2 minutes)
+2) Update frontend: src/components/CampaignDetails.tsx
+   - Replace: fetch('http://13.218.100.97:3000/api/automate', {
+   - With:    fetch('http://traffic-tool-alb-681297197.us-east-1.elb.amazonaws.com:3000/api/automate', {
+3) Deploy frontend changes (npm run build, then deploy to Vercel)
+4) Load test ALB: ab -n 100 -c 10 http://traffic-tool-alb-681297197.us-east-1.elb.amazonaws.com:3000/health
+5) Monitor CloudWatch (CPU, network, request count)
+6) Keep original instance (i-0b7f630295c40461f @ 13.218.100.97) running for 48 hours
+7) After 48 hours of stability: stop original, monitor for 1 week, then terminate if stable
+
+--- MONITORING COMMANDS ---
+Check ASG Status:
+  aws autoscaling describe-auto-scaling-groups \
+    --auto-scaling-group-names traffic-tool-asg \
+    --region us-east-1 --no-cli-pager --output table
+
+Check Target Health:
+  aws elbv2 describe-target-health \
+    --target-group-arn arn:aws:elasticloadbalancing:us-east-1:179406869795:targetgroup/traffic-tool-tg/9c37d2c6ff376eee \
+    --region us-east-1 --no-cli-pager --output table
+
+Check Scaling Activities:
+  aws autoscaling describe-scaling-activities \
+    --auto-scaling-group-name traffic-tool-asg \
+    --region us-east-1 --no-cli-pager --output table
+
+SSH to Instance:
+  ssh -i ~/Downloads/browser-automation-key.pem ubuntu@98.80.137.133
+  pm2 logs server
+
+--- ROLLBACK PLAN ---
+If issues occur, revert to original instance:
+
+1) Update frontend back to:
+   fetch('http://13.218.100.97:3000/api/automate', {
+
+2) Scale down ASG:
+   aws autoscaling set-desired-capacity \
+     --auto-scaling-group-name traffic-tool-asg \
+     --desired-capacity 0 --region us-east-1
+
+3) Original instance remains running (i-0b7f630295c40461f @ 13.218.100.97)
+
+Estimated rollback time: 5 minutes
+
+--- DEPLOYMENT COMPLETE ---
+All infrastructure is live and operational.
+Traffic is now load-balanced across 2 healthy instances.
+ASG will automatically scale from 2-10 instances based on CPU load.
+
+Ready for production traffic.

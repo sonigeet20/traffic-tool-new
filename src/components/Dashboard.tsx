@@ -217,6 +217,14 @@ export default function Dashboard() {
               <p className="text-slate-400">Configure integrations and advanced options</p>
             </div>
             <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6">
+              <h3 className="text-lg font-semibold text-white mb-2">Backend Endpoint (ALB)</h3>
+              <p className="text-slate-400 text-sm mb-4">Use this load balancer endpoint for all frontend API requests.</p>
+              <div className="bg-slate-900/50 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 font-mono text-sm break-all">
+                http://traffic-tool-alb-681297197.us-east-1.elb.amazonaws.com:3000/api/automate
+              </div>
+              <p className="text-slate-500 text-xs mt-3">If the ALB changes, update this value in code and redeploy.</p>
+            </div>
+            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6">
               <h3 className="text-lg font-semibold text-white mb-4">Bright Data Browser API</h3>
               <BrowserApiCredentials />
             </div>
