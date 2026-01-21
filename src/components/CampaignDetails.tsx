@@ -24,6 +24,7 @@ export default function CampaignDetails({ campaign, onBack, onEdit, onRefresh }:
   const [loading, setLoading] = useState(true);
   const [executing, setExecuting] = useState(false);
   const [browserApiConfig, setBrowserApiConfig] = useState<any>(null);
+  const [defaultProxyConfig, setDefaultProxyConfig] = useState<any>(null);
   const [sessionLogs, setSessionLogs] = useState<any[]>([]);
   const [logsExpanded, setLogsExpanded] = useState(false);
   const [showRealtimeLogs, setShowRealtimeLogs] = useState(false);
@@ -31,6 +32,7 @@ export default function CampaignDetails({ campaign, onBack, onEdit, onRefresh }:
   useEffect(() => {
     loadData();
     loadBrowserApiConfig();
+    loadDefaultProxyConfig();
     const dataInterval = setInterval(loadData, 5000);
     const completeInterval = setInterval(async () => {
       await supabase.rpc('auto_complete_sessions');
@@ -75,6 +77,41 @@ export default function CampaignDetails({ campaign, onBack, onEdit, onRefresh }:
       return null;
     } catch (err) {
       console.error('[DEBUG loadBrowserApiConfig] Exception:', (err as any).message);
+      return null;
+    }
+  }
+
+  async function loadDefaultProxyConfig() {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return null;
+
+      // Get default provider name from settings
+      const { data: settings } = await supabase
+        .from('settings')
+        .select('default_proxy_provider')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      const defaultProvider = settings?.default_proxy_provider;
+      if (!defaultProvider) return null;
+
+      // Fetch the provider credentials
+      const { data: provider } = await supabase
+        .from('proxy_providers')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('name', defaultProvider)
+        .eq('enabled', true)
+        .maybeSingle();
+
+      if (provider) {
+        setDefaultProxyConfig(provider);
+        return provider;
+      }
+      return null;
+    } catch (err) {
+      console.error('[loadDefaultProxyConfig] Error:', (err as any).message);
       return null;
     }
   }
@@ -250,6 +287,12 @@ export default function CampaignDetails({ campaign, onBack, onEdit, onRefresh }:
       payload.proxy = `http://${campaign.proxy_host || 'pr.lunaproxy.com'}:${campaign.proxy_port || '12233'}`;
       payload.proxyUsername = campaign.proxy_username;
       payload.proxyPassword = campaign.proxy_password;
+    } else if (defaultProxyConfig) {
+      // Use default proxy provider if no campaign-specific credentials
+      payload.proxy = `http://${defaultProxyConfig.host || 'pr.lunaproxy.com'}:${defaultProxyConfig.port || '12233'}`;
+      payload.proxyUsername = defaultProxyConfig.username;
+      payload.proxyPassword = defaultProxyConfig.password;
+      console.log('[DEBUG] Using default proxy provider:', defaultProxyConfig.name);
     }
 
     // Use Browser API for search traffic when enabled (replaces Luna proxy for search)
