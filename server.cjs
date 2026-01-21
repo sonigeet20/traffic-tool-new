@@ -892,7 +892,7 @@ async function searchWithBrowserAPI(searchKeyword, geoLocation, browserConfig, o
     const { headless = true, extensionPath = null } = options; // Accept headless and extension options
     
     console.log(`[BROWSER API SEARCH] Starting search "${searchKeyword}" (geo: ${geoLocation})`);
-    console.log(`[BROWSER API SEARCH] Mode: ${headless ? 'headless: true' : 'headless: false (extension support)'}`);
+    console.log(`[BROWSER API SEARCH] Mode: ${headless ? 'headless: false' : 'headless: false (extension support)'}`);
     if (extensionPath) {
       console.log(`[BROWSER API SEARCH] Extension will be loaded: ${extensionPath}`);
     }
@@ -1454,9 +1454,9 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
       browserArgs.push(`--proxy-server=http://${proxyHost}:${proxyPort}`);
     }
     
-    // Launch with headless: true for ALB compatibility (no X11 display available)
+    // Launch with headless: false (Xvfb provides X11 display)
     const lunaDirectBrowser = await puppeteer.launch({
-      headless: true,
+      headless: false,
       ignoreHTTPSErrors: true,
       args: browserArgs
     });
@@ -1850,7 +1850,7 @@ async function processAutomateJob(reqBody, jobId) {
       browserArgs.push(`--proxy-server=http://${proxyHost}:${proxyPort}`);
       
       browser = await puppeteer.launch({
-        headless: true, // Always use headless: true for ALB compatibility (no X11 display)
+        headless: false, // Use headless: false with Xvfb for real browser behavior
         ignoreHTTPSErrors: true,
         args: browserArgs
       });
@@ -2117,7 +2117,7 @@ async function processAutomateJob(reqBody, jobId) {
       
       // Launch temporary browser for SERP search with real device mode
       let serpBrowser = await puppeteer.launch({
-        headless: true,
+        headless: false,
         ignoreHTTPSErrors: true,
         args: [
           '--no-sandbox',
@@ -2211,9 +2211,9 @@ async function processAutomateJob(reqBody, jobId) {
       // Add proxy AFTER extension args
       browserArgs.push(`--proxy-server=http://${proxyHost}:${proxyPort}`);
       
-      // Launch with headless: true for ALB compatibility (no X11 display)
+      // Launch with headless: false (Xvfb provides X11 display)
       browser = await puppeteer.launch({
-        headless: true,
+        headless: false,
         ignoreHTTPSErrors: true,
         args: browserArgs
       });
@@ -2289,7 +2289,7 @@ async function processAutomateJob(reqBody, jobId) {
     } else {
       // Luna Proxy fallback for direct navigation (no extension, no Browser API)
       browser = await puppeteer.launch({
-        headless: true,
+        headless: false,
         ignoreHTTPSErrors: true,
         args: [
           '--no-sandbox',
