@@ -170,6 +170,9 @@ async function intelligentNavigate(page, siteAnalysis, bounceRate, minPages, max
       }
     } else if (siteAnalysis && siteAnalysis.navLinks && siteAnalysis.navLinks.length > 0) {
       sessionLogger.log('BEHAVIOR', 'Using intelligent link selection from site analysis', 'info');
+      
+      for (let i = 0; i < pagesToVisit - 1; i++) {
+        try {
           // Prefer links with keywords (page, post, article, category, etc.)
           const weightedLinks = siteAnalysis.navLinks.map(link => ({
             ...link,
@@ -209,6 +212,7 @@ async function intelligentNavigate(page, siteAnalysis, bounceRate, minPages, max
           break;
         }
       }
+    }
     } else {
       // Fallback: random browsing (original behavior)
       sessionLogger.log('BEHAVIOR', 'No site analysis available - using random browsing', 'info');
