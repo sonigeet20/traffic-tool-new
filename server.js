@@ -222,6 +222,15 @@ const DEVICE_PROFILES = {
 // Cache store for generated device profiles
 const deviceProfileCache = {};
 
+// No-op bandwidth tracker (zero CPU overhead for normal sessions)
+function createNoOpBandwidthTracker() {
+  return {
+    attachToPage: () => {},
+    getTotalBytes: () => 0,
+    report: () => {}
+  };
+}
+
 // Lightweight bandwidth tracker (response headers only)
 function createBandwidthTracker(sessionLogger, maxBandwidthKB = null) {
   let totalBytes = 0;
@@ -1692,12 +1701,22 @@ async function processAutomateJob(reqBody, jobId) {
   const sessionLogger = new SessionLogger(jobId);
   const sessionStartMs = Date.now();
   
-  // Use debug-mode bandwidth tracker if debugMode enabled, otherwise use standard tracker
+  // Only track bandwidth when debug mode is enabled OR bandwidth limit is set
+  // This avoids CPU overhead for normal sessions without limits
   const debugMode = reqBody.debugMode || false;
   const maxBandwidthKB = reqBody.maxBandwidthKB; // Extract bandwidth limit early for tracker
-  const bandwidthTracker = debugMode 
-    ? createDebugBandwidthTracker(sessionLogger, debugMode)
-    : createBandwidthTracker(sessionLogger, maxBandwidthKB);
+  
+  let bandwidthTracker;
+  if (debugMode) {
+    // Debug mode: use verbose tracker with detailed logging
+    bandwidthTracker = createDebugBandwidthTracker(sessionLogger, debugMode);
+  } else if (maxBandwidthKB) {
+    // Bandwidth limit set: use standard tracker with limit enforcement
+    bandwidthTracker = createBandwidthTracker(sessionLogger, maxBandwidthKB);
+  } else {
+    // No debug, no limit: use no-op tracker (zero CPU overhead)
+    bandwidthTracker = createNoOpBandwidthTracker();
+  }
 
   let browser;
   let page;
