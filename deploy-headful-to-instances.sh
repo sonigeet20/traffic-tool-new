@@ -18,21 +18,27 @@ echo "🛑 Stopping existing pm2 processes..."
 pm2 stop all || true
 pm2 delete all || true
 
-# Kill any existing Xvfb on :99
+# Kill any existing Xvfb on :99 and clean lock files
 pkill -f "Xvfb :99" || true
-sleep 2
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 || true
+sleep 3
 
 # Start Xvfb
 echo "🖥️  Starting Xvfb on display :99..."
-Xvfb :99 -screen 0 1920x1080x24 &
+Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
 export DISPLAY=:99
 sleep 3
 
 # Navigate to app directory
-cd /opt/traffic-tool || cd /home/ubuntu/traffic-tool || cd ~/traffic-tool
+APP_DIR="/home/ubuntu/puppeteer-server"
+if [ ! -d "$APP_DIR" ]; then
+    echo "❌ Directory $APP_DIR not found"
+    exit 1
+fi
+cd "$APP_DIR"
 
 # No git pull needed - code already deployed via other means
-echo "📦 Using existing code..."
+echo "📦 Using existing code in $APP_DIR..."
 
 # Install dependencies if needed
 if [ -f "package.json" ]; then
@@ -42,7 +48,7 @@ fi
 
 # Start with pm2 and set DISPLAY
 echo "▶️  Starting app with DISPLAY=:99..."
-DISPLAY=:99 pm2 start server.cjs --name app --interpreter node
+DISPLAY=:99 pm2 start server.js --name server --update-env
 
 # Configure pm2 startup
 echo "💾 Configuring pm2 startup..."

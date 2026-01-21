@@ -117,34 +117,38 @@ Deno.serve(async (req: Request) => {
 
         const totalSessionsCompleted = completedCount || 0;
 
+        // Check how many sessions were CREATED (not completed) in the last hour
         const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-        const { count: completedThisHour } = await supabase
+        const { count: createdThisHour } = await supabase
           .from('bot_sessions')
           .select('*', { count: 'exact', head: true })
           .eq('campaign_id', campaign.id)
-          .eq('status', 'completed')
-          .gte('completed_at', oneHourAgo);
+          .gte('created_at', oneHourAgo);
 
         const sessionsPerHourRaw = campaign.sessions_per_hour || 10;
         const sessionsPerHour = Math.max(1, Math.ceil(Number(sessionsPerHourRaw)));
-        const completedThisHourCount = completedThisHour || 0;
+        const createdThisHourCount = createdThisHour || 0;
 
-        if (completedThisHourCount >= sessionsPerHour) {
-          console.log(`Campaign ${campaign.id}: Hourly target already met (${completedThisHourCount}/${sessionsPerHour})`);
+        if (createdThisHourCount >= sessionsPerHour) {
+          console.log(`Campaign ${campaign.id}: Hourly target already met (${createdThisHourCount}/${sessionsPerHour} created this hour)`);
           results.push({
             campaignId: campaign.id,
             status: 'hourly_target_met',
-            completedThisHour: completedThisHourCount,
+            createdThisHour: createdThisHourCount,
             hourlyTarget: sessionsPerHour
           });
           continue;
         }
 
-        const remainingForHour = sessionsPerHour - completedThisHourCount;
+        // Calculate how many sessions to create this batch
+        // Spread sessions evenly: if sessions_per_hour=10 and scheduler runs every 5 min (12x/hour), create ~1 per run
+        const schedulerRunsPerHour = 12; // Runs every ~5 minutes
+        const sessionsPerRun = Math.ceil(sessionsPerHour / schedulerRunsPerHour);
+        const remainingForHour = sessionsPerHour - createdThisHourCount;
         const remainingOverall = campaign.total_sessions - totalSessionsCreated;
-        const sessionsToRun = Math.min(remainingForHour, remainingOverall);
+        const sessionsToRun = Math.min(sessionsPerRun, remainingForHour, remainingOverall);
 
-        console.log(`Campaign ${campaign.id}: Creating ${sessionsToRun} new sessions (${totalSessionsCreated}/${campaign.total_sessions} total created, ${completedThisHourCount}/${sessionsPerHour} completed this hour)`);
+        console.log(`Campaign ${campaign.id}: Creating ${sessionsToRun} new sessions (${totalSessionsCreated}/${campaign.total_sessions} total created, ${createdThisHourCount}/${sessionsPerHour} created this hour)`);
 
         await executeHourlyBatch(supabase, campaign, sessionsToRun, puppeteerServerUrl);
 
@@ -153,7 +157,7 @@ Deno.serve(async (req: Request) => {
           status: 'processed',
           sessionsCreated: sessionsToRun,
           totalCreated: totalSessionsCreated + sessionsToRun,
-          completedThisHour: completedThisHourCount,
+          createdThisHour: createdThisHourCount,
           hourlyTarget: sessionsPerHour,
           totalTarget: campaign.total_sessions
         });

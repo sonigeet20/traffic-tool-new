@@ -1454,9 +1454,9 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
       browserArgs.push(`--proxy-server=http://${proxyHost}:${proxyPort}`);
     }
     
-    // Launch with headless: false
+    // Launch with headless: true for ALB compatibility (no X11 display available)
     const lunaDirectBrowser = await puppeteer.launch({
-      headless: false,
+      headless: true,
       ignoreHTTPSErrors: true,
       args: browserArgs
     });
@@ -1850,7 +1850,7 @@ async function processAutomateJob(reqBody, jobId) {
       browserArgs.push(`--proxy-server=http://${proxyHost}:${proxyPort}`);
       
       browser = await puppeteer.launch({
-        headless: false, // Always use headless: false for search campaigns (Xvfb provides display)
+        headless: true, // Always use headless: true for ALB compatibility (no X11 display)
         ignoreHTTPSErrors: true,
         args: browserArgs
       });
@@ -2211,9 +2211,9 @@ async function processAutomateJob(reqBody, jobId) {
       // Add proxy AFTER extension args
       browserArgs.push(`--proxy-server=http://${proxyHost}:${proxyPort}`);
       
-      // Launch with headless: false (required for extensions)
+      // Launch with headless: true for ALB compatibility (no X11 display)
       browser = await puppeteer.launch({
-        headless: false,
+        headless: true,
         ignoreHTTPSErrors: true,
         args: browserArgs
       });
