@@ -15,6 +15,37 @@ const {
   initUltra10KBGuards
 } = require('./intelligent-traffic-module.js');
 
+// Helper function to insert logs into Supabase session_logs table
+async function insertSessionLog(supabaseUrl, supabaseKey, sessionId, level, message, metadata = {}) {
+  if (!supabaseUrl || !supabaseKey || !sessionId) {
+    return;
+  }
+  
+  try {
+    await axios.post(
+      `${supabaseUrl}/rest/v1/session_logs`,
+      {
+        session_id: sessionId,
+        level: level,
+        message: message,
+        metadata: metadata
+      },
+      {
+        headers: {
+          'apikey': supabaseKey,
+          'Authorization': `Bearer ${supabaseKey}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal'
+        }
+      }
+    );
+    return true;
+  } catch (err) {
+    // Silent fail - don't spam logs
+    return false;
+  }
+}
+
 // Temporary hardcoded Browser API token (HTTP API). Replace with env/config when available.
 const FALLBACK_BROWSER_API_TOKEN = process.env.BROWSER_API_TOKEN || 'cb3070be589695116882cfd8f6a37d4e3c0d19fe971d68b468ef4ab6d7437d1f';
 
@@ -1706,6 +1737,12 @@ async function processAutomateJob(reqBody, jobId) {
     console.log(`[SESSION] Type: ${(campaignType || 'direct').toUpperCase()}, Target: ${url}`);
     console.log(`[DEVICE] Using: ${deviceProfile.name}`);
     
+    // Log session start to Supabase
+    await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'info',
+      `Session started - ${campaignType} traffic to ${url}`,
+      { campaign_type: campaignType, target_url: url, device: deviceProfile.name, geo: geoLocation }
+    );
+    
     // Direct traffic: force Luna headful path and require Luna proxy creds
     if (campaignType === 'direct') {
       useLunaProxySearch = false;
@@ -2359,6 +2396,10 @@ async function processAutomateJob(reqBody, jobId) {
     console.log(`[NAVIGATE] *** NAVIGATION STEP ***`);
     console.log(`[NAVIGATE] URL to navigate: ${clickedUrl}`);
     console.log(`[NAVIGATE] Source: ${useLunaProxySearch && searchKeyword ? 'Browser API Search Result' : 'Direct Traffic/Target URL'}`);
+    await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'info',
+      `Navigating to target: ${clickedUrl}`,
+      { url: clickedUrl, source: useLunaProxySearch && searchKeyword ? 'search' : 'direct' }
+    );
     try {
       await page.goto(clickedUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       
@@ -2369,6 +2410,10 @@ async function processAutomateJob(reqBody, jobId) {
       const finalUrl = page.url();
       console.log(`[NAVIGATE] ✓ Page loaded successfully`);
       console.log(`[NAVIGATE] Final URL after navigation: ${finalUrl}`);
+      await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'info',
+        'Page loaded successfully',
+        { final_url: finalUrl }
+      );
       if (finalUrl !== clickedUrl) {
         console.log(`[NAVIGATE] ⚠️ URL changed due to redirects: ${clickedUrl} -> ${finalUrl}`);
 
@@ -2381,18 +2426,34 @@ async function processAutomateJob(reqBody, jobId) {
     // Execute user journey or random behavior
     if (userJourney && userJourney.length > 0) {
       console.log('[JOURNEY] Executing user actions...');
+      await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'info',
+        `Executing ${userJourney.length} user journey actions`,
+        { action_count: userJourney.length }
+      );
       for (const action of userJourney) {
         const { type, selector, url: actionUrl, text, delay } = action;
         try {
           if (type === 'click' && selector) {
             await page.click(selector);
             console.log(`[JOURNEY] ✓ Clicked: ${selector}`);
+            await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'debug',
+              `Clicked element: ${selector}`,
+              { action: 'click', selector }
+            );
           } else if (type === 'type' && selector) {
             await page.type(selector, text, { delay: 100 });
             console.log(`[JOURNEY] ✓ Typed in: ${selector}`);
+            await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'debug',
+              `Typed in element: ${selector}`,
+              { action: 'type', selector }
+            );
           } else if (type === 'navigate' && actionUrl) {
             await page.goto(actionUrl, { waitUntil: 'networkidle2' });
             console.log(`[JOURNEY] ✓ Navigated to: ${actionUrl}`);
+            await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'info',
+              `Navigated to: ${actionUrl}`,
+              { action: 'navigate', url: actionUrl }
+            );
           }
           
           if (delay) {
@@ -2403,6 +2464,10 @@ async function processAutomateJob(reqBody, jobId) {
         }
       }
       console.log('[JOURNEY] ✓ Completed');
+      await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'info',
+        'User journey completed',
+        {}
+      );
     } else {
       await maybeMultiPageBrowse(page, clickedUrl, sessionLogger);
     }
@@ -2418,12 +2483,20 @@ async function processAutomateJob(reqBody, jobId) {
     const actualDurationSec = Math.round((Date.now() - sessionStartMs) / 1000);
     bandwidthTracker.report(clickedUrl, actualDurationSec);
     console.log('[SESSION] ✓ Completed successfully');
+    await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'info',
+      `Session completed successfully (${actualDurationSec}s)`,
+      { duration_seconds: actualDurationSec, clicked_url: clickedUrl, bandwidth_bytes: bandwidthTracker.getTotalBytes() }
+    );
     const logs = sessionLogger.getLogs();
     return { success: true, sessionId, clickedUrl, targetUrl: clickedUrl, logs, bandwidthBytes: bandwidthTracker.getTotalBytes(), actualDurationSec };
     
   } catch (error) {
     sessionLogger.error('SESSION', error.message);
     console.error('[ERROR]', error.message);
+    await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'error',
+      `Session failed: ${error.message}`,
+      { error: error.message, stack: error.stack }
+    );
     throw error; // Re-throw for job queue to catch
   } finally {
     // CRITICAL CLEANUP: Always close browser
