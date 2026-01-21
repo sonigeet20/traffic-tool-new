@@ -21,18 +21,14 @@ Deno.serve(async (req: Request) => {
 
     console.log('[SESSION-COMPLETION-CHECKER] Starting check for stale sessions...');
 
-    // Find all "running" sessions that started more than 5 minutes ago
-    // These should have completed by now (max session duration is 240 seconds)
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-    
-    const { data: staleSessions, error: fetchError } = await supabase
+    // Find all "running" sessions
+    const { data: runningSessions, error: fetchError } = await supabase
       .from('bot_sessions')
-      .select('id, started_at, campaign_id')
-      .eq('status', 'running')
-      .lt('started_at', fiveMinutesAgo);
+      .select('id, started_at, campaign_id, session_duration_sec, is_bounced, bounce_duration_ms')
+      .eq('status', 'running');
 
     if (fetchError) {
-      console.error('[SESSION-COMPLETION-CHECKER] Error fetching stale sessions:', fetchError);
+      console.error('[SESSION-COMPLETION-CHECKER] Error fetching running sessions:', fetchError);
       return new Response(
         JSON.stringify({ error: 'Failed to fetch sessions', details: fetchError.message }),
         {
@@ -42,8 +38,41 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    if (!runningSessions || runningSessions.length === 0) {
+      console.log('[SESSION-COMPLETION-CHECKER] No running sessions found');
+      return new Response(
+        JSON.stringify({ 
+          success: true, 
+          message: 'No running sessions to check',
+          updatedCount: 0 
+        }),
+        {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    // Filter sessions that should have completed by now
+    // Use session_duration_sec (or default 120) + 60 second buffer for network/processing delays
+    const now = Date.now();
+    const staleSessions = runningSessions.filter(session => {
+      const startedAt = new Date(session.started_at).getTime();
+      const expectedDuration = session.is_bounced 
+        ? (session.bounce_duration_ms / 1000) // Convert ms to seconds
+        : (session.session_duration_sec || 120); // Default to 120 seconds if not set
+      const bufferSeconds = 60; // 1 minute buffer
+      const elapsedSeconds = (now - startedAt) / 1000;
+      
+      return elapsedSeconds > (expectedDuration + bufferSeconds);
+    });
+    
+    const { data: _unused, error: _unusedError } = await supabase
+      .from('bot_sessions')
+      .select('id')
+      .limit(0);
+
     if (!staleSessions || staleSessions.length === 0) {
-      console.log('[SESSION-COMPLETION-CHECKER] No stale sessions found');
+      console.log('[SESSION-COMPLETION-CHECKER] No stale sessions found (all sessions still within expected duration)');
       return new Response(
         JSON.stringify({ 
           success: true, 

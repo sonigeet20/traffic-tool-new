@@ -285,6 +285,7 @@ async function executeHourlyBatch(
       referrer: trafficSource === 'search' ? `https://www.google.com/search?q=${searchKeyword}` : null,
       is_bounced: shouldBounce,
       bounce_duration_ms: bounceDuration,
+      session_duration_sec: sessionDuration,
       started_at: new Date().toISOString(),
     });
 
