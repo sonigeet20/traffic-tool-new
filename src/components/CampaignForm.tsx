@@ -64,6 +64,7 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
   const [currentTab, setCurrentTab] = useState<'basic' | 'geo' | 'journey' | 'plugins'>('basic');
   const [siteStructure, setSiteStructure] = useState<any>(null);
   const [overrideProxySettings, setOverrideProxySettings] = useState(false);
+  const [headlessMode, setHeadlessMode] = useState<'true' | 'false' | 'new'>('true');
 
   useEffect(() => {
     loadProvidersFromSettings();
@@ -141,6 +142,7 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
       
       // If campaign has custom proxy credentials, show override
       setOverrideProxySettings(!!campaign.proxy_override_enabled);
+      setHeadlessMode((campaign as any).headless_mode || 'true');
       setLastCampaignId(campaign.id);
       
       loadJourneys(campaign.id);
@@ -231,6 +233,7 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
           use_luna_headful_direct: useLunaHeadfulDirect,
           site_structure: siteStructure,
           site_structure_traced_at: siteStructure ? new Date().toISOString() : null,
+          headless_mode: headlessMode,
           updated_at: new Date().toISOString(),
         };
         console.log('[SAVE DEBUG] Full update payload:', updateData);
@@ -282,6 +285,7 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
             use_luna_headful_direct: useLunaHeadfulDirect,
             site_structure: siteStructure,
             site_structure_traced_at: siteStructure ? new Date().toISOString() : null,
+            headless_mode: headlessMode,
           })
           .select()
           .single();
@@ -643,6 +647,35 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
                 </p>
                 <p className="mt-1 text-xs text-slate-400">
                   Common values: <code className="text-cyan-400">https://www.google.com/</code> for organic search, <code className="text-cyan-400">https://www.facebook.com/</code> for social
+                </p>
+              </div>
+
+              <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4">
+                <label className="block text-sm font-medium text-purple-400 mb-3">
+                  Browser Headless Mode
+                </label>
+                <select
+                  value={headlessMode}
+                  onChange={(e) => setHeadlessMode(e.target.value as 'true' | 'false' | 'new')}
+                  className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-purple-500 transition-colors"
+                >
+                  <option value="true">Traditional Headless (Recommended)</option>
+                  <option value="new">New Headless Mode (Chrome 112+)</option>
+                  <option value="false">Headed Mode (Requires Xvfb)</option>
+                </select>
+                <div className="mt-3 space-y-2 text-sm">
+                  <div className="text-purple-300">
+                    <strong>Traditional (true):</strong> Stable, works everywhere, supports extensions. Best for most cases.
+                  </div>
+                  <div className="text-purple-300">
+                    <strong>New (new):</strong> Chrome 112+ headless mode with extension support. Best of both worlds.
+                  </div>
+                  <div className="text-purple-300">
+                    <strong>Headed (false):</strong> Full browser with UI. Requires Xvfb on servers. Can be unstable.
+                  </div>
+                </div>
+                <p className="mt-2 text-xs text-slate-400">
+                  ⚠️ Changing this affects browser launch configuration on backend servers
                 </p>
               </div>
 
