@@ -1793,19 +1793,22 @@ async function processAutomateJob(reqBody, jobId) {
   // Prefer request-supplied token, else fall back to environment default
   const effectiveBrowserApiToken = browser_api_token || FALLBACK_BROWSER_API_TOKEN;
 
-    // Intelligent bandwidth-aware route planning
-    // Estimate: average page with resource guards = ~300KB
-    // With resource guards blocking heavy assets, pages typically use 200-400KB
+    // Intelligent bandwidth-aware route planning with mode-specific estimates
+    // Headless with browser-level blocking: ~3-5 KB per page (HTML + minimal JS only)
+    // Headful with interceptors: ~50-100 KB per page (needs visual elements)
     let calculatedMaxPages = maxPagesPerSession;
     if (maxBandwidthKB && !debugMode) {
-      // Pre-calculate max pages based on bandwidth budget
-      const AVG_PAGE_BANDWIDTH_KB = 300; // Conservative estimate with resource guards
+      // Pre-calculate max pages based on bandwidth budget and mode
+      // Headless mode gets much more aggressive blocking at browser level
+      const isHeadless = headlessMode === true || headlessMode === 'true' || headlessMode === 'new';
+      const AVG_PAGE_BANDWIDTH_KB = isHeadless ? 5 : 80; // 5KB for headless, 80KB for headful
       const bandwidthBasedMaxPages = Math.floor(maxBandwidthKB / AVG_PAGE_BANDWIDTH_KB);
       
       if (bandwidthBasedMaxPages < calculatedMaxPages) {
         calculatedMaxPages = Math.max(1, bandwidthBasedMaxPages); // At least 1 page
-        console.log(`[BANDWIDTH PLANNING] Limiting to ${calculatedMaxPages} pages based on ${maxBandwidthKB}KB budget (${AVG_PAGE_BANDWIDTH_KB}KB per page estimate)`);
-        sessionLogger.log('BANDWIDTH', `Pre-calculated route: ${calculatedMaxPages} pages max for ${maxBandwidthKB}KB budget`, 'info');
+        console.log(`[BANDWIDTH PLANNING] Mode: ${isHeadless ? 'headless' : 'headful'}, ${AVG_PAGE_BANDWIDTH_KB}KB/page estimate`);
+        console.log(`[BANDWIDTH PLANNING] Limiting to ${calculatedMaxPages} pages based on ${maxBandwidthKB}KB budget`);
+        sessionLogger.log('BANDWIDTH', `Pre-calculated route: ${calculatedMaxPages} pages max for ${maxBandwidthKB}KB budget (${isHeadless ? 'headless' : 'headful'} mode)`, 'info');
       }
     }
 
