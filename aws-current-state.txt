@@ -1,0 +1,14 @@
+=== AWS Infrastructure Discovery - Phase 1 ===
+Date: $(date)
+Region: us-east-1
+
+CURRENT INSTANCE:
+- Instance ID: i-0b7f630295c40461f
+- Instance Type: t3.large
+- VPC ID: vpc-0526c9da5a05585c5
+- Subnet ID: subnet-0ae4bfe59a78b1d76
+- Security Group: sg-08b44ed01825cbbb8
+- Key Name: browser-automation-key
+- Availability Zone: us-east-1c
+- Public IP: 13.218.100.97
+
