@@ -1,0 +1,14 @@
+{
+  "url": "https://techdim.com/",
+  "geoLocation": "US",
+  "proxy": null,
+  "proxyUsername": null,
+  "proxyPassword": null,
+  "sessionId": "test-direct-123456",
+  "sessionDurationMin": 5000,
+  "sessionDurationMax": 10000,
+  "extensionCrxUrl": null,
+  "supabaseUrl": "",
+  "supabaseKey": "",
+  "maxBandwidthMB": 1
+}

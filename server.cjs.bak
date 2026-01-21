@@ -889,14 +889,10 @@ async function navigateWithBrowserAPIHTTP(targetUrl, geoLocation, browserConfig)
 async function searchWithBrowserAPI(searchKeyword, geoLocation, browserConfig, options = {}) {
   try {
     const { browser_customer_id, browser_username, browser_zone, browser_password, browser_endpoint, browser_port } = browserConfig;
-    // Headless mode from options or env var: true (default), false (needs Xvfb), or 'new' (Chrome 112+)
-    const headlessMode = options.headless !== undefined ? options.headless :
-                        (process.env.HEADLESS_MODE === 'false' ? false :
-                         process.env.HEADLESS_MODE === 'new' ? 'new' : true);
-    const { extensionPath = null } = options;
+    const { headless = true, extensionPath = null } = options; // Accept headless and extension options
     
     console.log(`[BROWSER API SEARCH] Starting search "${searchKeyword}" (geo: ${geoLocation})`);
-    console.log(`[BROWSER API SEARCH] Mode: headless=${headlessMode}${extensionPath ? ' + extension' : ''}`);
+    console.log(`[BROWSER API SEARCH] Mode: ${headless ? 'headless: true' : 'headless: false (extension support)'}`);
     if (extensionPath) {
       console.log(`[BROWSER API SEARCH] Extension will be loaded: ${extensionPath}`);
     }
@@ -967,14 +963,12 @@ async function searchWithBrowserAPI(searchKeyword, geoLocation, browserConfig, o
     searchBrowserArgs.push(`--proxy-server=http://${proxyHost}:${proxyPort}`);
     
     const searchBrowser = await puppeteer.launch({
-      headless: headlessMode, // Use configured headless mode
+      headless: headless, // Use provided headless setting
       ignoreHTTPSErrors: true,
-      args: searchBrowserArgs,
-      dumpio: false,
-      timeout: 60000
+      args: searchBrowserArgs
     });
     
-    console.log(`[BROWSER API SEARCH] ✓ Browser launched (headless: ${headlessMode})`);
+    console.log('[BROWSER API SEARCH] ✓ Browser launched');
     
     const searchPage = await searchBrowser.newPage();
     
@@ -1435,14 +1429,6 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
     
     console.log(`[LUNA HEADFUL DIRECT] Proxy endpoint: ${proxyHost}:${proxyPort}`);
     
-    // Headless mode: use env var HEADLESS_MODE (true/false/new) or default to true
-    // true = traditional headless (no window, works everywhere)
-    // false = headed mode (requires Xvfb/X11, best for anti-detection)
-    // 'new' = new headless mode (Chrome 112+, extension support, no X11 needed)
-    const headlessMode = process.env.HEADLESS_MODE === 'false' ? false : 
-                        process.env.HEADLESS_MODE === 'new' ? 'new' : true;
-    console.log(`[LUNA HEADFUL DIRECT] Headless mode: ${headlessMode}`);
-    
     // Build browser args - extension FIRST, then proxy
     const browserArgs = [
       '--no-sandbox',
@@ -1453,8 +1439,7 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
       '--ignore-certificate-errors-spki-list',
       '--proxy-bypass-list=<-loopback>',
       `--window-size=${deviceProfile.screenWidth},${deviceProfile.screenHeight}`,
-      '--disable-gpu',
-      '--disable-software-rasterizer'
+      '--remote-debugging-port=0'
     ];
     
     // Add extension FIRST if provided
@@ -1469,13 +1454,11 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
       browserArgs.push(`--proxy-server=http://${proxyHost}:${proxyPort}`);
     }
     
-    // Launch with configured headless mode
+    // Launch with headless: false (Xvfb provides X11 display)
     const lunaDirectBrowser = await puppeteer.launch({
-      headless: headlessMode,
+      headless: false,
       ignoreHTTPSErrors: true,
-      args: browserArgs,
-      dumpio: false,
-      timeout: 60000
+      args: browserArgs
     });
     
     console.log('[LUNA HEADFUL DIRECT] ✓ Browser launched (headless: false)');
@@ -2134,7 +2117,7 @@ async function processAutomateJob(reqBody, jobId) {
       
       // Launch temporary browser for SERP search with real device mode
       let serpBrowser = await puppeteer.launch({
-        headless: false,
+        headless: true,
         ignoreHTTPSErrors: true,
         args: [
           '--no-sandbox',
@@ -2306,7 +2289,7 @@ async function processAutomateJob(reqBody, jobId) {
     } else {
       // Luna Proxy fallback for direct navigation (no extension, no Browser API)
       browser = await puppeteer.launch({
-        headless: false,
+        headless: true,
         ignoreHTTPSErrors: true,
         args: [
           '--no-sandbox',
