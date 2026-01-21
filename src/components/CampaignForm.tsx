@@ -53,7 +53,7 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
   const [maxPagesPerSession, setMaxPagesPerSession] = useState(3);
   const [debugMode, setDebugMode] = useState(false);
   const [customReferrer, setCustomReferrer] = useState('');
-  const [maxBandwidthMB, setMaxBandwidthMB] = useState<number>(1);
+  const [maxBandwidthKB, setMaxBandwidthKB] = useState<number>(1024);
   const [useSerpApi, setUseSerpApi] = useState(false);
   const [serpApiProvider, setSerpApiProvider] = useState('bright_data');
   const [useBrowserAutomation, setUseBrowserAutomation] = useState(false);
@@ -125,7 +125,7 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
       setSiteStructure(campaign.site_structure || null);
       setDebugMode(campaign.debug_mode || false);
       setCustomReferrer(campaign.custom_referrer || '');
-      setMaxBandwidthMB(Math.round(Number(campaign.max_bandwidth_mb ?? 1)) || 1);
+      setMaxBandwidthKB(Number(campaign.max_bandwidth_kb ?? 1024) || 1024);
       setUseSerpApi(campaign.use_serp_api || false);
       setSerpApiProvider(campaign.serp_api_provider || 'bright_data');
       setUseBrowserAutomation(campaign.use_browser_automation || false);
@@ -175,8 +175,8 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
-      const sanitizedMaxBandwidth = Number.isFinite(maxBandwidthMB)
-        ? Math.max(0, Math.round(maxBandwidthMB))
+      const sanitizedMaxBandwidth = Number.isFinite(maxBandwidthKB)
+        ? Math.max(0, maxBandwidthKB)
         : null;
 
       let campaignId = campaign?.id;
@@ -224,7 +224,7 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
           search_keywords: searchKeywords,
           extension_crx_url: extensionId || null,
           custom_referrer: customReferrer || null,
-          max_bandwidth_mb: sanitizedMaxBandwidth,
+          max_bandwidth_kb: sanitizedMaxBandwidth,
           use_serp_api: useSerpApi,
           serp_api_provider: serpApiProvider,
           use_browser_automation: useBrowserAutomation,
@@ -276,7 +276,7 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
             search_keywords: searchKeywords,
             extension_crx_url: extensionId || null,
             custom_referrer: customReferrer || null,
-            max_bandwidth_mb: sanitizedMaxBandwidth,
+            max_bandwidth_kb: sanitizedMaxBandwidth,
             use_serp_api: useSerpApi,
             serp_api_provider: serpApiProvider,
             use_browser_automation: useBrowserAutomation,
@@ -681,15 +681,15 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
 
               <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4">
                 <label className="block text-sm font-medium text-purple-400 mb-2">
-                  Max Bandwidth Per Session (MB)
+                  Max Bandwidth Per Session (KB)
                 </label>
                 <input
                   type="number"
-                  value={maxBandwidthMB}
-                  onChange={(e) => setMaxBandwidthMB(Math.max(0, Math.round(Number(e.target.value))))}
+                  value={maxBandwidthKB}
+                  onChange={(e) => setMaxBandwidthKB(Math.max(0, Number(e.target.value)))}
                   min="0"
-                  max="50"
-                  step="1"
+                  max="51200"
+                  step="0.1"
                   required
                   className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-purple-500 transition-colors"
                 />
@@ -697,7 +697,7 @@ export default function CampaignForm({ campaign, onSave, onCancel }: CampaignFor
                   Session will automatically stop once this bandwidth limit is reached. Extension loads via server bandwidth (no proxy), then all navigation uses proxies.
                 </p>
                 <p className="mt-1 text-xs text-slate-400">
-                  ⚡ Typical usage: 2-5 MB per session | Heavy sites: 10-20 MB
+                  ⚡ Typical usage: 2048-5120 KB per session | Heavy sites: 10240-20480 KB
                 </p>
               </div>
 
