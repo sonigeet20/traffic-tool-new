@@ -1021,6 +1021,16 @@ async function searchWithBrowserAPI(searchKeyword, geoLocation, browserConfig, o
       console.log(`[BROWSER API SEARCH] Loading extension from server (not through proxy): ${extensionPath}`);
     }
     
+    // For headless mode: add browser-level resource blocking (more efficient)
+    if (headlessMode === true || headlessMode === 'true' || headlessMode === 'new') {
+      searchBrowserArgs.push(
+        '--blink-settings=imagesEnabled=false',
+        '--disable-remote-fonts',
+        '--disable-background-networking'
+      );
+      console.log('[BROWSER API SEARCH] Headless mode: browser-level resource blocking enabled');
+    }
+    
     // Add proxy AFTER extension
     searchBrowserArgs.push(`--proxy-server=http://${proxyHost}:${proxyPort}`);
     
@@ -1516,6 +1526,16 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
       '--disable-gpu',
       '--disable-software-rasterizer'
     ];
+    
+    // For headless mode: add browser-level resource blocking (more efficient, zero CPU overhead)
+    if (headlessMode === true || headlessMode === 'true' || headlessMode === 'new') {
+      browserArgs.push(
+        '--blink-settings=imagesEnabled=false',  // Disable images at browser level
+        '--disable-remote-fonts',                // Disable web fonts
+        '--disable-background-networking'        // Reduce background activity
+      );
+      console.log('[LUNA HEADFUL DIRECT] Headless mode: browser-level resource blocking enabled');
+    }
     
     // Add extension FIRST if provided
     if (extensionPath) {
@@ -2243,17 +2263,28 @@ async function processAutomateJob(reqBody, jobId) {
         port: serp_port || '33335'
       };
       
+      const serpBrowserArgs = [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-blink-features=AutomationControlled',
+        `--window-size=${deviceProfile.screenWidth},${deviceProfile.screenHeight}`,
+      ];
+      
+      // For headless: add browser-level resource blocking
+      if (headlessMode === true || headlessMode === 'true' || headlessMode === 'new') {
+        serpBrowserArgs.push(
+          '--blink-settings=imagesEnabled=false',
+          '--disable-remote-fonts',
+          '--disable-background-networking'
+        );
+      }
+      
       // Launch temporary browser for SERP search with real device mode
       let serpBrowser = await puppeteer.launch({
         headless: false,
         ignoreHTTPSErrors: true,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-blink-features=AutomationControlled',
-          `--window-size=${deviceProfile.screenWidth},${deviceProfile.screenHeight}`,
-        ]
+        args: serpBrowserArgs
       });
       
       let serpPage = await serpBrowser.newPage();
@@ -2416,19 +2447,30 @@ async function processAutomateJob(reqBody, jobId) {
       try { initLeanResourceGuards(page, new URL(clickedUrl).hostname, maxBandwidthKB); } catch {}
     } else {
       // Luna Proxy fallback for direct navigation (no extension, no Browser API)
+      const lunaFallbackArgs = [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-blink-features=AutomationControlled',
+        '--ignore-certificate-errors',
+        '--proxy-bypass-list=<-loopback>',
+        `--window-size=${deviceProfile.screenWidth},${deviceProfile.screenHeight}`,
+          ...(proxy ? [`--proxy-server=${proxy}`] : [])
+        ];
+      
+      // For headless: add browser-level resource blocking
+      if (headlessMode === true || headlessMode === 'true' || headlessMode === 'new') {
+        lunaFallbackArgs.push(
+          '--blink-settings=imagesEnabled=false',
+          '--disable-remote-fonts',
+          '--disable-background-networking'
+        );
+      }
+      
       browser = await puppeteer.launch({
         headless: false,
         ignoreHTTPSErrors: true,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-blink-features=AutomationControlled',
-          '--ignore-certificate-errors',
-          '--proxy-bypass-list=<-loopback>',
-          `--window-size=${deviceProfile.screenWidth},${deviceProfile.screenHeight}`,
-          ...(proxy ? [`--proxy-server=${proxy}`] : [])
-        ]
+        args: lunaFallbackArgs
       });
       
       page = await browser.newPage();
