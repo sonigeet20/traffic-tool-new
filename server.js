@@ -1681,6 +1681,9 @@ async function processAutomateJob(reqBody, jobId) {
   let browser;
   let page;
   let clickedUrl = reqBody.url;
+  
+  // Extract these early so they're available in catch block for error logging
+  const { sessionId, supabaseUrl, supabaseKey } = reqBody;
 
   try {
     const {
@@ -1708,12 +1711,9 @@ async function processAutomateJob(reqBody, jobId) {
       // Extension params
       extensionId, // Chrome Web Store extension ID
       // Common params
-      sessionId,
       userJourney,
       sessionDurationMin,
       sessionDurationMax,
-      supabaseUrl,
-      supabaseKey,
       bounceRate
     } = reqBody;
 
