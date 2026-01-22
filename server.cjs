@@ -1749,6 +1749,12 @@ async function processAutomateJob(reqBody, jobId) {
   
   // Extract these early so they're available in catch block for error logging
   const { sessionId, supabaseUrl, supabaseKey } = reqBody;
+  
+  // Debug: Log received parameters
+  console.log('[REQUEST DEBUG] minPagesPerSession:', reqBody.minPagesPerSession);
+  console.log('[REQUEST DEBUG] maxPagesPerSession:', reqBody.maxPagesPerSession);
+  console.log('[REQUEST DEBUG] maxBandwidthKB:', reqBody.maxBandwidthKB);
+  console.log('[REQUEST DEBUG] headlessMode:', reqBody.headlessMode);
 
   try {
     const {
