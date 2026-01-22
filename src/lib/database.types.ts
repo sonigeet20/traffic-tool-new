@@ -44,7 +44,7 @@ type CampaignRow = {
 	use_browser_automation?: Nullable<boolean>;
 	use_luna_proxy_search?: Nullable<boolean>;
 	campaign_type?: Nullable<'direct' | 'search'>;
-	max_bandwidth_mb?: Nullable<number>;
+	max_bandwidth_kb?: Nullable<number>;
 };
 
 type SettingsRow = {
