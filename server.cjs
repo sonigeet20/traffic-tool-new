@@ -1802,6 +1802,8 @@ async function processAutomateJob(reqBody, jobId) {
     // Headless with browser-level blocking: ~3-5 KB per page (HTML + minimal JS only)
     // Headful with interceptors: ~50-100 KB per page (needs visual elements)
     let calculatedMaxPages = maxPagesPerSession;
+    console.log(`[BANDWIDTH PLANNING] Initial: minPages=${minPagesPerSession}, maxPages=${maxPagesPerSession}, bandwidthKB=${maxBandwidthKB}, headless=${headlessMode}`);
+    
     if (maxBandwidthKB && !debugMode) {
       // Pre-calculate max pages based on bandwidth budget and mode
       // Headless mode gets much more aggressive blocking at browser level
@@ -1809,12 +1811,14 @@ async function processAutomateJob(reqBody, jobId) {
       const AVG_PAGE_BANDWIDTH_KB = isHeadless ? 5 : 80; // 5KB for headless, 80KB for headful
       const bandwidthBasedMaxPages = Math.floor(maxBandwidthKB / AVG_PAGE_BANDWIDTH_KB);
       
-      if (bandwidthBasedMaxPages < calculatedMaxPages) {
-        calculatedMaxPages = Math.max(1, bandwidthBasedMaxPages); // At least 1 page
-        console.log(`[BANDWIDTH PLANNING] Mode: ${isHeadless ? 'headless' : 'headful'}, ${AVG_PAGE_BANDWIDTH_KB}KB/page estimate`);
-        console.log(`[BANDWIDTH PLANNING] Limiting to ${calculatedMaxPages} pages based on ${maxBandwidthKB}KB budget`);
-        sessionLogger.log('BANDWIDTH', `Pre-calculated route: ${calculatedMaxPages} pages max for ${maxBandwidthKB}KB budget (${isHeadless ? 'headless' : 'headful'} mode)`, 'info');
-      }
+      console.log(`[BANDWIDTH PLANNING] Mode: ${isHeadless ? 'headless' : 'headful'}, ${AVG_PAGE_BANDWIDTH_KB}KB/page, allows ${bandwidthBasedMaxPages} pages`);
+      
+      // Always use bandwidth-based calculation when bandwidth limit is set
+      calculatedMaxPages = Math.max(1, bandwidthBasedMaxPages);
+      console.log(`[BANDWIDTH PLANNING] Setting calculatedMaxPages=${calculatedMaxPages} (was ${maxPagesPerSession})`);
+      sessionLogger.log('BANDWIDTH', `Route: ${calculatedMaxPages} pages for ${maxBandwidthKB}KB (${isHeadless ? 'headless' : 'headful'})`, 'info');
+    } else {
+      console.log(`[BANDWIDTH PLANNING] No limit, using campaign maxPages=${maxPagesPerSession}`);
     }
 
     const deviceProfile = generateDeviceProfile(geoLocation || 'US');
@@ -2047,6 +2051,7 @@ async function processAutomateJob(reqBody, jobId) {
         // Use intelligent navigation with min/max pages and bounce rate
         const minPages = minPagesPerSession || 1;
         const maxPages = calculatedMaxPages || maxPagesPerSession || 3; // Use bandwidth-aware limit
+        console.log(`[NAVIGATION] Starting intelligent navigation: minPages=${minPages}, maxPages=${maxPages}, bounceRate=${bounceRate}`);
         await intelligentNavigate(page, null, bounceRate || 0, minPages, maxPages, sessionLogger, siteStructure);
       }
 
@@ -2148,6 +2153,7 @@ async function processAutomateJob(reqBody, jobId) {
           // Use intelligent navigation with min/max pages and bounce rate
           const minPages = minPagesPerSession || 1;
           const maxPages = calculatedMaxPages || maxPagesPerSession || 3; // Use bandwidth-aware limit
+          console.log(`[NAVIGATION] Search flow - intelligent navigation: minPages=${minPages}, maxPages=${maxPages}, bounceRate=${bounceRate}`);
           await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'info',
             `Starting intelligent multi-page navigation (${minPages}-${maxPages} pages)`,
             { bounce_rate: bounceRate || 0 }
