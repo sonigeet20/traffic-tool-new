@@ -371,6 +371,12 @@ export default function CampaignDetails({ campaign, onBack, onEdit, onRefresh }:
     payload.headlessMode = campaign.headless_mode || 'true';
     console.log('[HEADLESS MODE DEBUG] headlessMode set to:', payload.headlessMode);
 
+    // Add max bandwidth limit if set
+    if (campaign.max_bandwidth_kb) {
+      payload.maxBandwidthKB = campaign.max_bandwidth_kb;
+      console.log('[BANDWIDTH DEBUG] maxBandwidthKB set to:', payload.maxBandwidthKB, 'KB');
+    }
+
     console.log('[DEBUG PAYLOAD]', {
       searchKeyword: payload.searchKeyword,
       isSearchTraffic: payload.isSearchTraffic,
