@@ -124,27 +124,15 @@ export default function CampaignsList({
     const runId = `direct-${campaign.id.substring(0, 8)}-${Date.now()}`;
     
     try {
-      // Get proxy configuration
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        alert('Not authenticated');
-        return;
-      }
-
-      // Get Luna proxy config for direct campaigns
-      const { data: lunaConfig } = await supabase
-        .from('luna_proxy_config')
-        .select('*')
-        .eq('user_id', user.id)
-        .maybeSingle();
-
-      if (!lunaConfig) {
-        alert('Luna proxy configuration not found. Please configure in Settings.');
+      // Get proxy configuration from campaign
+      if (!campaign.proxy_username || !campaign.proxy_password || !campaign.proxy_host) {
+        alert('Bright Data proxy configuration not found on campaign. Please configure proxy settings.');
         return;
       }
 
       const geoLocations = campaign.target_geo_locations || ['US'];
       const targetUrl = campaign.target_url;
+      const proxyUrl = `http://${campaign.proxy_host}:${campaign.proxy_port || '33335'}`;
 
       let successCount = 0;
       const batchSize = 50; // Send in batches to avoid overwhelming the browser
@@ -168,10 +156,10 @@ export default function CampaignsList({
             url: url,
             targetUrl: targetUrl,
             geoLocation: geoLocation,
-            proxy: lunaConfig.proxy,
-            proxyUsername: lunaConfig.proxy_username,
-            proxyPassword: lunaConfig.proxy_password,
-            proxyProvider: lunaConfig.provider_name || 'brightdata',
+            proxy: proxyUrl,
+            proxyUsername: campaign.proxy_username,
+            proxyPassword: campaign.proxy_password,
+            proxyProvider: 'brightdata',
             headlessMode: 'false', // Always headful with extension
             maxBandwidthKB: campaign.max_bandwidth_mb ? Math.round(campaign.max_bandwidth_mb * 1024) : 220,
             minPagesPerSession: 1,
