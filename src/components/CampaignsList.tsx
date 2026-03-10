@@ -124,76 +124,24 @@ export default function CampaignsList({
     const runId = `direct-${campaign.id.substring(0, 8)}-${Date.now()}`;
     
     try {
-      // Get proxy configuration from campaign
-      if (!campaign.proxy_username || !campaign.proxy_password || !campaign.proxy_host) {
-        alert('Bright Data proxy configuration not found on campaign. Please configure proxy settings.');
+      const { data, error } = await supabase.functions.invoke('direct-launch-campaign', {
+        body: { campaignId: campaign.id, runId },
+      });
+
+      if (error) {
+        console.error('Direct launch function error:', error);
+        alert(`Failed to launch campaign: ${error.message || 'Unknown error'}`);
         return;
       }
 
-      const geoLocations = campaign.target_geo_locations || ['US'];
-      const targetUrl = campaign.target_url;
-      const proxyUrl = `http://${campaign.proxy_host}:${campaign.proxy_port || '33335'}`;
-
-      let successCount = 0;
-      const batchSize = 50; // Send in batches to avoid overwhelming the browser
-      const totalBatches = Math.ceil(totalSessions / batchSize);
-
-      // Send sessions in batches
-      for (let batch = 0; batch < totalBatches; batch++) {
-        const batchStart = batch * batchSize;
-        const batchEnd = Math.min(batchStart + batchSize, totalSessions);
-        const promises = [];
-
-        for (let i = batchStart; i < batchEnd; i++) {
-          const sessionNum = i + 1;
-          const sessionId = `${runId}-${sessionNum}`;
-          const geoLocation = geoLocations[i % geoLocations.length];
-          const url = `${targetUrl}${targetUrl.includes('?') ? '&' : '?'}${runId}=${sessionNum}`;
-
-          const requestPayload = {
-            sessionId: sessionId,
-            campaignType: campaign.campaign_type || 'direct',
-            url: url,
-            targetUrl: targetUrl,
-            geoLocation: geoLocation,
-            proxy: proxyUrl,
-            proxyUsername: campaign.proxy_username,
-            proxyPassword: campaign.proxy_password,
-            proxyProvider: 'brightdata',
-            headlessMode: 'false', // Always headful with extension
-            maxBandwidthKB: campaign.max_bandwidth_mb ? Math.round(campaign.max_bandwidth_mb * 1024) : 220,
-            minPagesPerSession: 1,
-            maxPagesPerSession: 2,
-            sessionDurationMin: campaign.session_duration_min || 20,
-            sessionDurationMax: campaign.session_duration_max || 30,
-            extensionId: 'hoklmmgfnpapgjgcpechhaamimifchmp', // Similarweb extension
-          };
-
-          const promise = fetch('http://traffic-tool-alb-681297197.us-east-1.elb.amazonaws.com:3000/api/automate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestPayload),
-          })
-            .then(res => res.text())
-            .then(result => {
-              if (result.includes('accepted') || result.includes('queued')) {
-                successCount++;
-              }
-            })
-            .catch(() => {});
-
-          promises.push(promise);
-        }
-
-        await Promise.all(promises);
-        
-        // Update progress
-        if (batch < totalBatches - 1) {
-          console.log(`Sent batch ${batch + 1}/${totalBatches}: ${successCount}/${batchEnd} accepted`);
-        }
+      if (!data?.success) {
+        alert(`Failed to launch campaign: ${data?.error || 'Unknown error'}`);
+        return;
       }
 
-      alert(`Campaign Launched Directly to AWS!\n\nRUN_ID: ${runId}\nTotal Requested: ${totalSessions} sessions\nAccepted: ${successCount}\n\nSessions are now queued on AWS and will execute based on backend capacity.\n\nCheck Google Analytics in 5-10 minutes for activity.`);
+      alert(
+        `Campaign Launch Started!\n\nRUN_ID: ${data.runId || runId}\nInitial Accepted: ${data.accepted || 0}\nDispatched: ${data.dispatched || 0}/${data.totalSessions || totalSessions}\n\nDispatch will continue server-side until all sessions are queued to AWS.\n\nCheck Google Analytics in 2-5 minutes for activity.`
+      );
     } catch (error) {
       console.error('Error running direct campaign:', error);
       alert('Failed to run direct campaign. Check console for details.');
