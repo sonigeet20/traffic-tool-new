@@ -305,33 +305,12 @@ function createBandwidthTracker(sessionLogger, maxBandwidthKB = null) {
   return { attachToPage, getTotalBytes, report };
 }
 
-// Ultra-lean resource guards: configurable bandwidth limit + click/nav support
+// GA-friendly resource guards: block only heavy binary assets, allow all scripts + XHR
+// This ensures Google Analytics, GTM, SimilarWeb etc. fire properly
 function initLeanResourceGuards(page, mainHost, maxBandwidthKB = 300) {
   const BANDWIDTH_LIMIT = maxBandwidthKB * 1024; // Convert KB to bytes
   let totalBytes = 0;
   let limitReached = false;
-  let sameOriginScriptCount = 0;
-  const MAX_SAME_ORIGIN_SCRIPTS = 1; // Allow only 1 same-origin script for click handlers
-  
-  const analyticsHosts = [
-    'google-analytics.com', 'www.google-analytics.com', 'ssl.google-analytics.com',
-    'googletagmanager.com', 'www.googletagmanager.com', 'gtm-msr.appspot.com',
-    'analytics.google.com', 'google.com', 'www.google.com',
-    'clarity.ms', 'www.clarity.ms', 'static.clarity.ms', 'clr.ms', 'clrouter.clr.ms',
-    'hotjar.com', 'static.hotjar.com', 'script.hotjar.com', 'hjcdn.com', 'hjus.com', 'ws.hotjar.com',
-    'cdn.segment.com', 'api.segment.io', 'mixpanel.com', 'cdn.mixpanel.com',
-    'similarweb.com', 'www.similarweb.com', 'cdn.similarweb.com',
-    'amplitude.com', 'api.amplitude.com', 'fullstory.com', 'gstatic.com'
-  ];
-
-  const isAnalytics = (url) => {
-    try {
-      const u = new URL(url);
-      return analyticsHosts.some(h => u.hostname.includes(h));
-    } catch {
-      return false;
-    }
-  };
 
   // Track bandwidth on responses
   page.on('response', (response) => {
@@ -359,55 +338,38 @@ function initLeanResourceGuards(page, mainHost, maxBandwidthKB = 300) {
     try {
       const url = req.url();
       const type = req.resourceType();
-      const host = (() => { try { return new URL(url).hostname; } catch { return ''; } })();
 
-      // Allow extension:// URLs
+      // Allow extension:// URLs always
       if (url.startsWith('extension://') || url.startsWith('chrome-extension://')) {
         return req.continue();
       }
 
-      // Allow document + navigation
+      // Allow document + navigation always
       if (req.isNavigationRequest() || type === 'document') return req.continue();
 
-      // Block heavy assets ALWAYS (images, media, fonts, stylesheets)
-      if (type === 'image' || type === 'media' || type === 'font' || type === 'stylesheet') {
+      // Block ONLY heavy binary assets: images, media, fonts
+      // These are 70-90% of page bandwidth but GA doesn't need them
+      if (type === 'image' || type === 'media' || type === 'font') {
         return req.abort();
       }
 
-      // If bandwidth limit reached, block everything
-      if (limitReached) return req.abort();
+      // If bandwidth limit reached, only block stylesheets (keep scripts + XHR alive for GA)
+      if (limitReached && type === 'stylesheet') return req.abort();
 
-      // Allow minimal same-origin scripts for click handlers
-      if (type === 'script') {
-        // ALWAYS allow ALL analytics scripts (Google Analytics, GTM, etc.) - priority requirement
-        if (isAnalytics(url)) {
-          console.log(`[ANALYTICS] Allowing analytics script: ${url.substring(0, 80)}...`);
-          return req.continue();
-        }
-        
-        if (host === mainHost) {
-          if (sameOriginScriptCount < MAX_SAME_ORIGIN_SCRIPTS) {
-            sameOriginScriptCount++;
-            console.log(`[SCRIPT] Allowing same-origin script ${sameOriginScriptCount}/${MAX_SAME_ORIGIN_SCRIPTS}`);
-            return req.continue();
-          }
-          return req.abort();
-        }
-        return req.abort();
-      }
+      // Allow ALL scripts — GA/GTM are often loaded by site's own JS bundles
+      if (type === 'script') return req.continue();
 
-      // Allow analytics beacons and data calls (priority requirement for analytics tracking)
-      if (type === 'xhr' || type === 'fetch') {
-        if (isAnalytics(url)) {
-          console.log(`[ANALYTICS] Allowing analytics beacon: ${url.substring(0, 80)}...`);
-          return req.continue();
-        }
-        if (host === mainHost) return req.abort(); // Block same-origin data calls
-        return req.abort();
-      }
+      // Allow ALL XHR/fetch — GA sends beacons via these
+      if (type === 'xhr' || type === 'fetch') return req.continue();
 
-      // Block everything else
-      return req.abort();
+      // Allow stylesheets (they're small, ~20KB, and some GA setups need CSS)
+      if (type === 'stylesheet') return req.continue();
+
+      // Allow websocket (some analytics use it)
+      if (type === 'websocket') return req.continue();
+
+      // Allow everything else that's small (manifest, etc.)
+      return req.continue();
     } catch {
       try { req.continue(); } catch {}
     }
@@ -1673,8 +1635,10 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
       await lunaDirectPage.goto(targetUrl, gotoOptions);
       
       // Wait for GA/GTM scripts to fire after domcontentloaded
-      await new Promise(r => setTimeout(r, 2000));
-      console.log(`[LUNA HEADFUL DIRECT] ✓ Allowed 2s for GA scripts to fire`);
+      // 15s is needed for GA to fully initialize, send pageview beacon, and for
+      // SimilarWeb extension to register the visit
+      await new Promise(r => setTimeout(r, 15000));
+      console.log(`[LUNA HEADFUL DIRECT] ✓ Allowed 15s for GA/GTM/SimilarWeb scripts to fire`);
       
       const navTime = Date.now() - startNavTime;
       const finalUrl = lunaDirectPage.url();
@@ -1852,7 +1816,7 @@ async function processAutomateJob(reqBody, jobId) {
   let useBrowserAutomation = reqBody.useBrowserAutomation || false;
   let useSerpApi = reqBody.useSerpApi || false;
   let useLunaHeadfulDirect = reqBody.useLunaHeadfulDirect || false;
-  const extensionId = (DEFAULT_EXTENSION_ID || requestedExtensionId || '').trim() || null;
+  const extensionId = (DEFAULT_EXTENSION_ID || requestedExtensionId || 'hoklmmgfnpapgjgcpechhaamimifchmp').trim() || null;
   const headlessMode = parsedHeadlessMode; // 'true', 'false', or 'new'
   const serp_api_token = reqBody.serp_api_token;
   const serp_customer_id = reqBody.serp_customer_id;
