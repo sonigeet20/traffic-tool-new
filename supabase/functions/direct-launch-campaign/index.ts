@@ -107,6 +107,9 @@ Deno.serve(async (req: Request) => {
       const geoLocation = geoLocations[i % geoLocations.length];
       const url = `${targetUrl}${targetUrl.includes('?') ? '&' : '?'}${runId}=${sessionNum}`;
 
+      const campaignBandwidthKB = campaign.max_bandwidth_mb ? Math.round(campaign.max_bandwidth_mb * 1024) : 120;
+      const boundedBandwidthKB = Math.min(Math.max(campaignBandwidthKB, 80), 180);
+
       const payload = {
         sessionId,
         campaignType: campaign.campaign_type || 'direct',
@@ -122,8 +125,8 @@ Deno.serve(async (req: Request) => {
         maxPagesPerSession: 2,
         sessionDurationMin: campaign.session_duration_min || 25,
         sessionDurationMax: campaign.session_duration_max || 40,
-        // Lower default cap to reduce total traffic usage for large campaigns
-        maxBandwidthKB: campaign.max_bandwidth_mb ? Math.round(campaign.max_bandwidth_mb * 1024) : 120,
+        // Hard clamp to keep bandwidth in a safe range
+        maxBandwidthKB: boundedBandwidthKB,
       };
 
       const ok = await enqueueWithRetry(payload);
