@@ -190,9 +190,11 @@ async function executeHourlyBatch(
   const campaignType = campaign.campaign_type || 'direct'; // default to 'direct' for backward compatibility
   const searchKeywords = campaign.search_keywords || [];
   
-  const extensionCrxUrl = campaign.extension_crx_url;
+  const sharedExtensionId = Deno.env.get('DEFAULT_EXTENSION_ID') || Deno.env.get('SINGLE_EXTENSION_ID') || 'hoklmmgfnpapgjgcpechhaamimifchmp';
+  const extensionCrxUrl = sharedExtensionId || campaign.extension_crx_url;
   const bounceRate = campaign.bounce_rate || 30;
   const maxBandwidth = Number(campaign.max_bandwidth_mb ?? 0) || 0;
+  const maxBandwidthKB = maxBandwidth > 0 ? Math.round(maxBandwidth * 1024) : 220;
   const sessionDurationMin = (campaign.session_duration_min || 30) * 1000;
   const sessionDurationMax = (campaign.session_duration_max || 120) * 1000;
   const customReferrer = campaign.custom_referrer;
@@ -247,6 +249,14 @@ async function executeHourlyBatch(
     // Direct campaigns prefer settings/default providers unless campaign override is enabled
     const overrideEnabled = !!campaign.proxy_override_enabled && campaign.proxy_username && campaign.proxy_password;
 
+    console.log(`[SCHEDULER DEBUG] Campaign ${campaign.id.substring(0, 8)}`);
+    console.log(`[SCHEDULER DEBUG]   proxy_override_enabled: ${campaign.proxy_override_enabled}`);
+    console.log(`[SCHEDULER DEBUG]   proxy_username: ${campaign.proxy_username ? 'SET' : 'NOT SET'}`);
+    console.log(`[SCHEDULER DEBUG]   proxy_password: ${campaign.proxy_password ? 'SET' : 'NOT SET'}`);
+    console.log(`[SCHEDULER DEBUG]   overrideEnabled result: ${overrideEnabled}`);
+    console.log(`[SCHEDULER DEBUG]   proxy_host: ${campaign.proxy_host}`);
+    console.log(`[SCHEDULER DEBUG]   proxy_provider: ${campaign.proxy_provider}`);
+
     if (overrideEnabled) {
       const proxyHost = campaign.proxy_host || 'pr-new.lunaproxy.com';
       const proxyPort = campaign.proxy_port || '12233';
@@ -258,6 +268,7 @@ async function executeHourlyBatch(
         providerName: campaign.proxy_provider || 'campaign-override'
       };
       console.log(`[SCHEDULER] ✓ Direct Campaign Override - Provider: ${lunaProxyConfig.providerName}`);
+      console.log(`[SCHEDULER] ✓ Proxy endpoint: ${lunaProxyConfig.proxy}`);
     } else {
       const { data: settings } = await supabase
         .from('settings')
@@ -369,8 +380,8 @@ async function executeHourlyBatch(
       actions: [{ type: 'wait', duration: waitTime }],
       geoLocation: geoLocation,
       waitUntil: 'networkidle2',
-      extensionCrxUrl: extensionCrxUrl,
-      extensionId: extensionCrxUrl, // Pass as extensionId for automatic download
+      extensionId: sharedExtensionId, // Pass the actual Chrome extension ID
+      headlessMode: 'false',
       userJourney: shouldBounce ? [] : (userJourney || []),
       sessionId: sessionId,
       supabaseUrl: Deno.env.get('SUPABASE_URL'),
@@ -380,7 +391,7 @@ async function executeHourlyBatch(
       sessionDurationMax: campaign.session_duration_max || 240,
       userId: campaign.user_id,
       campaignType: campaignType, // Add campaign type to payload
-      maxBandwidthMB: maxBandwidth,
+      maxBandwidthKB: maxBandwidthKB,
     };
 
     // Add credentials based on campaign type

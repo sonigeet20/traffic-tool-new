@@ -170,6 +170,14 @@ export default function Dashboard() {
                 <Settings className="w-4 h-4" />
                 Settings
               </button>
+              <a
+                href="/seo/"
+                className="px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg font-medium transition-all flex items-center gap-2 hover:from-green-600 hover:to-emerald-700 shadow-lg"
+                title="SEO+ Ranking Tracker"
+              >
+                <BarChart3 className="w-4 h-4" />
+                SEO+ Tool
+              </a>
               <button
                 onClick={handleSignOut}
                 className="px-4 py-2 bg-slate-700 text-slate-300 hover:bg-slate-600 rounded-lg font-medium transition-all flex items-center gap-2"

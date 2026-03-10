@@ -1,0 +1,374 @@
+import React, { useEffect, useState } from 'react';
+import Layout from '@/components/Layout';
+import { supabase, SEOCampaign, SEOProject, SEOKeyword } from '@/lib/supabase';
+import {
+  Plus, Zap, Play, Pause, CheckCircle, Trash2, X, Target,
+  MousePointerClick, Globe, Smartphone, Monitor, TrendingUp,
+  Clock, BarChart3, AlertCircle
+} from 'lucide-react';
+import { format } from 'date-fns';
+
+const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
+  draft:     { color: 'badge-slate',  icon: <AlertCircle className="w-3 h-3" />, label: 'Draft' },
+  running:   { color: 'badge-green',  icon: <Play className="w-3 h-3" />, label: 'Running' },
+  paused:    { color: 'badge-orange', icon: <Pause className="w-3 h-3" />, label: 'Paused' },
+  completed: { color: 'badge-blue',   icon: <CheckCircle className="w-3 h-3" />, label: 'Completed' },
+};
+
+export default function CampaignsPage() {
+  const [campaigns, setCampaigns] = useState<SEOCampaign[]>([]);
+  const [projects, setProjects] = useState<SEOProject[]>([]);
+  const [keywords, setKeywords] = useState<SEOKeyword[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const [form, setForm] = useState({
+    project_id: '', keyword_id: '', name: '', search_keyword: '', target_url: '',
+    total_clicks_goal: '100', daily_click_limit: '10'
+  });
+
+  useEffect(() => { loadData(); }, []);
+
+  const loadData = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const [{ data: camps }, { data: prjs }] = await Promise.all([
+      supabase
+        .from('seo_campaigns')
+        .select('*, seo_projects(name, website_url), seo_keywords(keyword)')
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('seo_projects')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('name')
+    ]);
+
+    setCampaigns(camps || []);
+    setProjects(prjs || []);
+    setLoading(false);
+  };
+
+  const loadKeywordsForProject = async (projectId: string) => {
+    const { data } = await supabase
+      .from('seo_keywords')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('keyword');
+    setKeywords(data || []);
+  };
+
+  const createCampaign = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+
+    const { error } = await supabase.from('seo_campaigns').insert({
+      project_id: form.project_id,
+      keyword_id: form.keyword_id || null,
+      name: form.name.trim(),
+      search_keyword: form.search_keyword.trim(),
+      target_url: form.target_url.trim() || null,
+      total_clicks_goal: parseInt(form.total_clicks_goal),
+      total_clicks_delivered: 0,
+      daily_click_limit: parseInt(form.daily_click_limit),
+      status: 'draft',
+      device_mix: { desktop: 60, mobile: 35, tablet: 5 },
+      bounce_rate: 30
+    });
+
+    if (!error) {
+      setShowModal(false);
+      setForm({ project_id: '', keyword_id: '', name: '', search_keyword: '', target_url: '', total_clicks_goal: '100', daily_click_limit: '10' });
+      loadData();
+    }
+    setSaving(false);
+  };
+
+  const toggleStatus = async (campaign: SEOCampaign) => {
+    const newStatus = campaign.status === 'running' ? 'paused' : 'running';
+    await supabase.from('seo_campaigns').update({ status: newStatus }).eq('id', campaign.id);
+    setCampaigns(prev => prev.map(c => c.id === campaign.id ? { ...c, status: newStatus } : c));
+  };
+
+  const deleteCampaign = async (id: string) => {
+    await supabase.from('seo_campaigns').delete().eq('id', id);
+    setCampaigns(prev => prev.filter(c => c.id !== id));
+  };
+
+  const stats = {
+    total: campaigns.length,
+    running: campaigns.filter(c => c.status === 'running').length,
+    completed: campaigns.filter(c => c.status === 'completed').length,
+    totalClicks: campaigns.reduce((sum, c) => sum + (c.total_clicks_delivered || 0), 0),
+  };
+
+  const getProgress = (c: SEOCampaign) =>
+    c.total_clicks_goal > 0 ? Math.min(100, Math.round((c.total_clicks_delivered / c.total_clicks_goal) * 100)) : 0;
+
+  if (loading) {
+    return (
+      <Layout title="Campaigns">
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-6">
+          {[...Array(4)].map((_, i) => <div key={i} className="card p-4"><div className="skeleton h-12 w-full" /></div>)}
+        </div>
+      </Layout>
+    );
+  }
+
+  return (
+    <Layout
+      title="Campaigns"
+      subtitle="Click campaigns for rank improvement"
+      actions={
+        <button onClick={() => setShowModal(true)} className="btn btn-primary btn-sm" disabled={projects.length === 0}>
+          <Plus className="w-3.5 h-3.5" /> New Campaign
+        </button>
+      }
+    >
+      {/* ─── Stats ─── */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+        <div className="card stat-blue p-4">
+          <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Total</p>
+          <p className="text-2xl font-bold text-white">{stats.total}</p>
+        </div>
+        <div className="card stat-green p-4">
+          <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Running</p>
+          <p className="text-2xl font-bold text-emerald-400">{stats.running}</p>
+        </div>
+        <div className="card stat-purple p-4">
+          <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Completed</p>
+          <p className="text-2xl font-bold text-purple-400">{stats.completed}</p>
+        </div>
+        <div className="card stat-cyan p-4">
+          <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Total Clicks</p>
+          <p className="text-2xl font-bold text-cyan-400">{stats.totalClicks.toLocaleString()}</p>
+        </div>
+      </div>
+
+      {/* ─── Campaign list ─── */}
+      {campaigns.length === 0 ? (
+        <div className="card p-12 text-center">
+          <div className="w-14 h-14 rounded-2xl bg-orange-500/10 border border-orange-500/20 flex items-center justify-center mx-auto mb-4">
+            <Zap className="w-7 h-7 text-orange-400" />
+          </div>
+          <h3 className="text-lg font-semibold text-white mb-2">No campaigns yet</h3>
+          <p className="text-sm text-slate-400 mb-6 max-w-sm mx-auto">
+            Create click campaigns to simulate organic search traffic and improve keyword rankings.
+          </p>
+          {projects.length > 0 ? (
+            <button onClick={() => setShowModal(true)} className="btn btn-primary">
+              <Plus className="w-4 h-4" /> Create Campaign
+            </button>
+          ) : (
+            <p className="text-xs text-slate-500">Create a project first to start a campaign.</p>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {campaigns.map((campaign, i) => {
+            const progress = getProgress(campaign);
+            const statusCfg = STATUS_CONFIG[campaign.status] || STATUS_CONFIG.draft;
+            const deviceMix = campaign.device_mix || { desktop: 60, mobile: 35, tablet: 5 };
+
+            return (
+              <div key={campaign.id} className="card p-5 fade-in" style={{ animationDelay: `${i * 40}ms` }}>
+                <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+                  {/* Campaign info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <h3 className="text-sm font-semibold text-white truncate">{campaign.name}</h3>
+                      <span className={`badge ${statusCfg.color} flex items-center gap-1`}>
+                        {statusCfg.icon} {statusCfg.label}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+                      <span className="flex items-center gap-1">
+                        <Globe className="w-3 h-3" />
+                        {campaign.seo_projects?.name || '—'}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Target className="w-3 h-3" />
+                        {campaign.search_keyword}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {campaign.daily_click_limit}/day
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Progress */}
+                  <div className="w-full lg:w-48 flex-shrink-0">
+                    <div className="flex items-center justify-between text-xs mb-1.5">
+                      <span className="text-slate-400">{campaign.total_clicks_delivered} / {campaign.total_clicks_goal}</span>
+                      <span className="text-slate-500">{progress}%</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-500"
+                        style={{ width: `${progress}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Device mix */}
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    <div className="flex items-center gap-1 text-xs text-slate-500" title="Desktop">
+                      <Monitor className="w-3 h-3" /> {deviceMix.desktop || 0}%
+                    </div>
+                    <div className="flex items-center gap-1 text-xs text-slate-500" title="Mobile">
+                      <Smartphone className="w-3 h-3" /> {deviceMix.mobile || 0}%
+                    </div>
+                  </div>
+
+                  {/* Rank impact */}
+                  {campaign.rank_before != null && campaign.rank_after != null && (
+                    <div className="flex items-center gap-2 flex-shrink-0 px-3 py-2 rounded-lg bg-slate-800/50">
+                      <span className="text-xs text-slate-400">Rank</span>
+                      <span className="text-sm font-mono text-slate-300">{campaign.rank_before}</span>
+                      <span className="text-slate-600">→</span>
+                      <span className="text-sm font-mono text-white">{campaign.rank_after}</span>
+                      {campaign.rank_improvement && campaign.rank_improvement > 0 && (
+                        <span className="badge badge-green text-[10px]">
+                          <TrendingUp className="w-2.5 h-2.5" /> +{campaign.rank_improvement}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <button
+                      onClick={() => toggleStatus(campaign)}
+                      disabled={campaign.status === 'completed'}
+                      className={`btn btn-sm ${campaign.status === 'running' ? 'btn-secondary' : 'btn-success'}`}
+                    >
+                      {campaign.status === 'running' ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                    </button>
+                    <button
+                      onClick={() => { if (confirm(`Delete "${campaign.name}"?`)) deleteCampaign(campaign.id); }}
+                      className="btn btn-danger btn-sm"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ─── Create campaign modal ─── */}
+      {showModal && (
+        <div className="modal-overlay" onClick={() => setShowModal(false)}>
+          <div className="modal-content p-6 max-w-xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-semibold text-white">New Click Campaign</h3>
+              <button onClick={() => setShowModal(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={createCampaign} className="space-y-4">
+              <div>
+                <label className="input-label">Campaign Name</label>
+                <input
+                  className="input"
+                  placeholder="Q1 Link Building Push"
+                  value={form.name}
+                  onChange={e => setForm({ ...form, name: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="input-label">Project</label>
+                  <select
+                    className="select"
+                    value={form.project_id}
+                    onChange={e => { setForm({ ...form, project_id: e.target.value, keyword_id: '' }); loadKeywordsForProject(e.target.value); }}
+                    required
+                  >
+                    <option value="">Select project…</option>
+                    {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="input-label">Target Keyword</label>
+                  <select
+                    className="select"
+                    value={form.keyword_id}
+                    onChange={e => {
+                      const kw = keywords.find(k => k.id === e.target.value);
+                      setForm({ ...form, keyword_id: e.target.value, search_keyword: kw?.keyword || form.search_keyword });
+                    }}
+                  >
+                    <option value="">Select keyword (optional)…</option>
+                    {keywords.map(k => <option key={k.id} value={k.id}>{k.keyword}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="input-label">Search Query</label>
+                <input
+                  className="input"
+                  placeholder="The exact Google search query"
+                  value={form.search_keyword}
+                  onChange={e => setForm({ ...form, search_keyword: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="input-label">Target URL (optional)</label>
+                <input
+                  className="input"
+                  placeholder="https://example.com/page-to-click"
+                  value={form.target_url}
+                  onChange={e => setForm({ ...form, target_url: e.target.value })}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="input-label">Total Click Goal</label>
+                  <input
+                    type="number"
+                    className="input"
+                    value={form.total_clicks_goal}
+                    onChange={e => setForm({ ...form, total_clicks_goal: e.target.value })}
+                    min="1"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="input-label">Daily Click Limit</label>
+                  <input
+                    type="number"
+                    className="input"
+                    value={form.daily_click_limit}
+                    onChange={e => setForm({ ...form, daily_click_limit: e.target.value })}
+                    min="1"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button type="button" onClick={() => setShowModal(false)} className="btn btn-secondary">Cancel</button>
+                <button type="submit" disabled={saving} className="btn btn-primary">
+                  {saving ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Zap className="w-4 h-4" />}
+                  Create Campaign
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </Layout>
+  );
+}

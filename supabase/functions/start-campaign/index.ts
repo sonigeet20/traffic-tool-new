@@ -46,21 +46,27 @@ Deno.serve(async (req: Request) => {
 
     // Trigger the scheduler to start processing immediately
     const schedulerUrl = `${supabaseUrl}/functions/v1/campaign-scheduler`;
-    const schedulerResponse = await fetch(schedulerUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${supabaseKey}`,
-        'Content-Type': 'application/json',
-      },
-    });
+    let schedulerResult: any = { status: 'triggered' };
+    try {
+      const schedulerResponse = await fetch(schedulerUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${supabaseKey}`,
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(5000),
+      });
 
-    let schedulerResult = null;
-    if (!schedulerResponse.ok) {
-      const errorText = await schedulerResponse.text();
-      console.error('Failed to trigger scheduler:', errorText);
-      schedulerResult = { error: errorText };
-    } else {
-      schedulerResult = await schedulerResponse.json();
+      if (!schedulerResponse.ok) {
+        const errorText = await schedulerResponse.text();
+        console.error('Failed to trigger scheduler:', errorText);
+        schedulerResult = { status: 'error', error: errorText };
+      } else {
+        schedulerResult = await schedulerResponse.json();
+      }
+    } catch (schedulerError) {
+      console.warn('Scheduler trigger timed out or failed, campaign remains active:', schedulerError?.message || schedulerError);
+      schedulerResult = { status: 'queued', message: 'Scheduler invocation timed out; campaign is active and will be picked up on next run' };
     }
 
     return new Response(

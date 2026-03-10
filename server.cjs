@@ -15,6 +15,10 @@ const {
   initUltra10KBGuards
 } = require('./intelligent-traffic-module.js');
 
+const DEFAULT_EXTENSION_ID = process.env.DEFAULT_EXTENSION_ID || process.env.SINGLE_EXTENSION_ID || null;
+let SHARED_EXTENSION_PATH = null;
+let SHARED_EXTENSION_WARMING = false;
+
 // Helper function to insert logs into Supabase session_logs table
 async function insertSessionLog(supabaseUrl, supabaseKey, sessionId, level, message, metadata = {}) {
   if (!supabaseUrl || !supabaseKey || !sessionId) {
@@ -83,8 +87,30 @@ function extractOrganicLinksFromHtml(html) {
 puppeteer.use(StealthPlugin());
 
 // Global session concurrency control (forcefully enforced)
-const MAX_CONCURRENT_SESSIONS = 3;
+const MAX_CONCURRENT_SESSIONS = 10;
 let activeSessionCount = 0;
+
+async function resolveSharedExtensionPath(requestedExtensionId = null) {
+  const effectiveExtensionId = (DEFAULT_EXTENSION_ID || requestedExtensionId || '').trim();
+  if (!effectiveExtensionId) return null;
+
+  if (SHARED_EXTENSION_PATH) return SHARED_EXTENSION_PATH;
+
+  const extensionPath = await getExtensionPath(effectiveExtensionId);
+  SHARED_EXTENSION_PATH = extensionPath;
+  return extensionPath;
+}
+
+async function warmSharedExtensionOnce() {
+  if (SHARED_EXTENSION_WARMING || !DEFAULT_EXTENSION_ID) return;
+  SHARED_EXTENSION_WARMING = true;
+  try {
+    SHARED_EXTENSION_PATH = await resolveSharedExtensionPath(DEFAULT_EXTENSION_ID);
+    console.log(`[EXTENSION] ✓ Shared extension preloaded once: ${DEFAULT_EXTENSION_ID} -> ${SHARED_EXTENSION_PATH}`);
+  } catch (err) {
+    console.error(`[EXTENSION] Failed to preload shared extension ${DEFAULT_EXTENSION_ID}: ${err.message}`);
+  }
+}
 
 // ════════════════════════════════════════════════════════════════════════
 // JOB QUEUE (FIFO) WITH CONCURRENCY CONTROL
@@ -781,6 +807,9 @@ async function simulateGoogleSearch(page) {
 const app = express();
 app.use(express.json());
 
+// If a single shared plugin is configured, download/cache it once at startup.
+warmSharedExtensionOnce().catch(() => {});
+
 // Add CORS support
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -1471,7 +1500,10 @@ class SessionLogger {
 // LUNA HEADFUL DIRECT - Direct traffic with extension support
 // ════════════════════════════════════════════════════════════════════════
 
-async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, deviceProfile, extensionPath = null, searchKeyword = null, customReferrer = null, headlessModeOverride = null) {
+async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, deviceProfile, extensionPath = null, searchKeyword = null, customReferrer = null, headlessModeOverride = null, maxBandwidthKBOverride = 300) {
+  let lunaDirectBrowser = null;
+  let lunaDirectPage = null;
+  
   try {
     const { proxy, proxyUsername, proxyPassword } = lunaConfig;
     
@@ -1583,10 +1615,17 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
     
     // Set proxy auth if provided
     if (proxyUsername && proxyPassword) {
-      // Ensure geo targeting is always applied: append -region-<geo> if missing
-      const authUsername = proxyUsername.includes('-region-')
-        ? proxyUsername
-        : `${proxyUsername}-region-${geoLocation.toLowerCase()}`;
+      // Ensure geo targeting is always applied with provider-specific suffix:
+      // Luna: -region-xx, Bright Data: -country-XX
+      const geoCode = (geoLocation || 'US').toUpperCase();
+      const isLunaProxy = proxyUsername.includes('admin_') || proxyUsername.includes('lunaproxy');
+      let authUsername = proxyUsername;
+
+      if (isLunaProxy && !authUsername.includes('-region-')) {
+        authUsername = `${authUsername}-region-${geoCode.toLowerCase()}`;
+      } else if (!isLunaProxy && !authUsername.includes('-country-')) {
+        authUsername = `${authUsername}-country-${geoCode}`;
+      }
       
       console.log(`[LUNA HEADFUL DIRECT] Setting proxy authentication...`);
       await lunaDirectPage.authenticate({
@@ -1594,7 +1633,7 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
         password: proxyPassword
       });
       console.log(`[LUNA HEADFUL DIRECT] ✓ Proxy authentication configured`);
-      console.log(`[LUNA HEADFUL DIRECT] Auth username: ${authUsername.substring(0, 40)}...`);
+      console.log(`[LUNA HEADFUL DIRECT] Auth username: ${authUsername.substring(0, 40)}... [${isLunaProxy ? 'Luna' : 'Bright Data'}]`);
       console.log(`[LUNA HEADFUL DIRECT] Auth password: ${'*'.repeat(Math.min(proxyPassword.length, 8))}`);
     } else {
       console.warn(`[LUNA HEADFUL DIRECT] ⚠️ No proxy credentials provided!`);
@@ -1609,7 +1648,7 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
     // Attach lean resource guards to reduce bandwidth while preserving analytics
     try {
       const host = new URL(targetUrl).hostname;
-      initLeanResourceGuards(lunaDirectPage, host, maxBandwidthKB);
+      initLeanResourceGuards(lunaDirectPage, host, maxBandwidthKBOverride || 300);
       console.log(`[LUNA HEADFUL DIRECT] ✓ Lean resource guards attached for host: ${host}`);
     } catch (err) {
       console.log(`[LUNA HEADFUL DIRECT] Resource guards attach failed: ${err.message}`);
@@ -1687,8 +1726,20 @@ async function navigateWithLunaHeadful(targetUrl, geoLocation, lunaConfig, devic
     return { browser: lunaDirectBrowser, page: lunaDirectPage, success: true };
     
   } catch (error) {
-    console.error(`[LUNA HEADFUL DIRECT] Error: ${error.message}`);
-    return { success: false, error: error.message };
+    console.error(`[LUNA HEADFUL DIRECT] ✗ CRITICAL ERROR: ${error.message}`);
+    console.error(`[LUNA HEADFUL DIRECT] Stack: ${error.stack}`);
+    
+    // Cleanup on error
+    if (lunaDirectBrowser) {
+      try {
+        await lunaDirectBrowser.close();
+        console.log('[LUNA HEADFUL DIRECT] Browser cleaned up after error');
+      } catch (closeErr) {
+        console.error('[LUNA HEADFUL DIRECT] Error during cleanup:', closeErr.message);
+      }
+    }
+    
+    return { success: false, error: error.message, errorStack: error.stack };
   }
 }
 
@@ -1729,7 +1780,15 @@ async function processAutomateJob(reqBody, jobId) {
   // Only track bandwidth when debug mode is enabled OR bandwidth limit is set
   // This avoids CPU overhead for normal sessions without limits
   const debugMode = reqBody.debugMode || false;
-  const maxBandwidthKB = reqBody.maxBandwidthKB; // Extract bandwidth limit early for tracker
+  const requestedHeadlessMode = reqBody.headlessMode;
+  const parsedHeadlessMode = requestedHeadlessMode !== undefined && requestedHeadlessMode !== null
+    ? requestedHeadlessMode
+    : 'false';
+  const isHeadfulRequested = parsedHeadlessMode === false || parsedHeadlessMode === 'false';
+  const requestedMaxBandwidthKB = Number(reqBody.maxBandwidthKB || 0);
+  const requestedMaxBandwidthMB = Number(reqBody.maxBandwidthMB || 0);
+  const maxBandwidthFromMB = requestedMaxBandwidthMB > 0 ? Math.round(requestedMaxBandwidthMB * 1024) : 0;
+  const maxBandwidthKB = requestedMaxBandwidthKB || maxBandwidthFromMB || (isHeadfulRequested ? 220 : 120);
   
   let bandwidthTracker;
   if (debugMode) {
@@ -1753,8 +1812,8 @@ async function processAutomateJob(reqBody, jobId) {
   // Debug: Log received parameters
   console.log('[REQUEST DEBUG] minPagesPerSession:', reqBody.minPagesPerSession);
   console.log('[REQUEST DEBUG] maxPagesPerSession:', reqBody.maxPagesPerSession);
-  console.log('[REQUEST DEBUG] maxBandwidthKB:', reqBody.maxBandwidthKB);
-  console.log('[REQUEST DEBUG] headlessMode:', reqBody.headlessMode);
+  console.log('[REQUEST DEBUG] maxBandwidthKB:', maxBandwidthKB);
+  console.log('[REQUEST DEBUG] headlessMode:', parsedHeadlessMode);
 
   try {
     const {
@@ -1780,7 +1839,7 @@ async function processAutomateJob(reqBody, jobId) {
       browser_endpoint,
       browser_port,
       // Extension params
-      extensionId, // Chrome Web Store extension ID
+      extensionId: requestedExtensionId, // Chrome Web Store extension ID
       // Common params
       userJourney,
       sessionDurationMin,
@@ -1793,8 +1852,8 @@ async function processAutomateJob(reqBody, jobId) {
   let useBrowserAutomation = reqBody.useBrowserAutomation || false;
   let useSerpApi = reqBody.useSerpApi || false;
   let useLunaHeadfulDirect = reqBody.useLunaHeadfulDirect || false;
-  const headlessMode = reqBody.headlessMode; // 'true', 'false', or 'new'
-  const maxBandwidthKB = reqBody.maxBandwidthKB; // Maximum bandwidth in KB
+  const extensionId = (DEFAULT_EXTENSION_ID || requestedExtensionId || '').trim() || null;
+  const headlessMode = parsedHeadlessMode; // 'true', 'false', or 'new'
   const serp_api_token = reqBody.serp_api_token;
   const serp_customer_id = reqBody.serp_customer_id;
   const serp_zone_name = reqBody.serp_zone_name;
@@ -1839,18 +1898,26 @@ async function processAutomateJob(reqBody, jobId) {
       { campaign_type: campaignType, target_url: url, device: deviceProfile.name, geo: geoLocation }
     );
     
-    // Direct traffic: force Luna headful path and require Luna proxy creds
+    // Direct traffic: use Luna headful path only if not explicitly disabled
     if (campaignType === 'direct') {
       useLunaProxySearch = false;
       useBrowserAutomation = false;
       useSerpApi = false;
-      useLunaHeadfulDirect = true;
+      // Only force Luna Headful if not explicitly disabled
+      if (useLunaHeadfulDirect !== false) {
+        useLunaHeadfulDirect = true;
+      }
 
       if (!proxy || !proxyUsername || !proxyPassword) {
-        const msg = 'Direct traffic requires Luna proxy credentials (proxy, proxyUsername, proxyPassword)';
-        sessionLogger.error('LUNA', msg);
+        const msg = 'Direct traffic requires proxy credentials (proxy, proxyUsername, proxyPassword)';
+        sessionLogger.error('PROXY', msg);
         throw new Error(msg);
       }
+      
+      // Log the proxy provider being used
+      console.log(`[DIRECT] Proxy endpoint: ${proxy}`);
+      console.log(`[DIRECT] Proxy username format: ${proxyUsername.substring(0, 20)}...`);
+      console.log(`[DIRECT] Using Luna Headful Direct: ${useLunaHeadfulDirect}`);
     }
     
     // ═══════════════════════════════════════════════════════════
@@ -1873,7 +1940,7 @@ async function processAutomateJob(reqBody, jobId) {
       let extensionPath = null;
       if (extensionId) {
         try {
-          extensionPath = await getExtensionPath(extensionId);
+          extensionPath = await resolveSharedExtensionPath(extensionId);
           console.log(`[EXTENSION] Extension ready for search: ${extensionId} -> ${extensionPath}`);
         } catch (error) {
           console.error(`[EXTENSION] Failed to load extension ${extensionId}:`, error.message);
@@ -2086,7 +2153,7 @@ async function processAutomateJob(reqBody, jobId) {
       let extensionPath = null;
       if (extensionId) {
         try {
-          extensionPath = await getExtensionPath(extensionId);
+          extensionPath = await resolveSharedExtensionPath(extensionId);
           sessionLogger.success('EXTENSION', `Extension ready: ${extensionId}`);
         } catch (error) {
           sessionLogger.error('EXTENSION', `Failed to load extension ${extensionId}: ${error.message}`);
@@ -2104,7 +2171,18 @@ async function processAutomateJob(reqBody, jobId) {
         'Starting Luna Headful Direct navigation',
         { url, geo: geoLocation, headless_mode: headlessMode }
       );
-      const result = await navigateWithLunaHeadful(url, geoLocation || 'US', lunaConfig, deviceProfile, extensionPath, searchKeyword, customReferrer, headlessMode);
+      const result = await navigateWithLunaHeadful(url, geoLocation || 'US', lunaConfig, deviceProfile, extensionPath, searchKeyword, customReferrer, headlessMode, maxBandwidthKB);
+      
+      if (!result.success) {
+        const errorMsg = `Luna Headful Direct navigation failed: ${result.error}`;
+        sessionLogger.error('LUNA', errorMsg);
+        await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'error',
+          errorMsg,
+          { error: result.error, error_stack: result.errorStack }
+        );
+        console.error(`[SESSION FATAL] ${errorMsg}`);
+        throw new Error(errorMsg);
+      }
       
       if (result.success && result.page) {
         page = result.page;
@@ -2184,10 +2262,6 @@ async function processAutomateJob(reqBody, jobId) {
         sessionLogger.success('SESSION', 'Completed successfully');
         const logs = sessionLogger.getLogs();
         return { success: true, sessionId, clickedUrl, targetUrl: clickedUrl, method: 'luna_headful_direct', logs, bandwidthBytes: bandwidthTracker.getTotalBytes(), actualDurationSec, bandwidthReport: debugMode ? bandwidthReport : undefined };
-      } else {
-        sessionLogger.error('LUNA', `Navigation failed: ${result.error}`);
-        const logs = sessionLogger.getLogs();
-        throw new Error(`Luna Headful Direct failed: ${result.error}`);
       }
     }
     
@@ -2350,7 +2424,7 @@ async function processAutomateJob(reqBody, jobId) {
     let extensionPath = null;
     if (campaignType !== 'direct' && extensionId) {
       try {
-        extensionPath = await getExtensionPath(extensionId);
+        extensionPath = await resolveSharedExtensionPath(extensionId);
         console.log(`[EXTENSION] Extension ready: ${extensionId} -> ${extensionPath}`);
       } catch (error) {
         console.error(`[EXTENSION] Failed to load extension ${extensionId}:`, error.message);
@@ -2499,10 +2573,17 @@ async function processAutomateJob(reqBody, jobId) {
       
       // Set proxy auth if using Luna Proxy
       if (proxy && proxyUsername && proxyPassword) {
-        // Always enforce geo targeting: append -region-<geo> when absent
-        const authUsername = proxyUsername.includes('-region-')
-          ? proxyUsername
-          : `${proxyUsername}-region-${geoLocation ? geoLocation.toLowerCase() : 'us'}`;
+        // Always enforce geo targeting with provider-specific suffix
+        // Luna: -region-xx, Bright Data: -country-XX
+        const geoCode = (geoLocation || 'US').toUpperCase();
+        const isLunaProxy = proxyUsername.includes('admin_') || proxyUsername.includes('lunaproxy');
+        let authUsername = proxyUsername;
+
+        if (isLunaProxy && !authUsername.includes('-region-')) {
+          authUsername = `${authUsername}-region-${geoCode.toLowerCase()}`;
+        } else if (!isLunaProxy && !authUsername.includes('-country-')) {
+          authUsername = `${authUsername}-country-${geoCode}`;
+        }
         
         await page.authenticate({
           username: authUsername,
@@ -2747,8 +2828,219 @@ app.post('/api/test-headless', async (req, res) => {
   }
 });
 
+// ════════════════════════════════════════════════════════════════════════
+// SEO+ ENDPOINTS (Ranking Crawler + Click Campaigns)
+// ════════════════════════════════════════════════════════════════════════
+
+const { SEOBrowserEngine } = require('./seo-browser-engine.cjs');
+
+/**
+ * POST /api/seo/crawl-rankings
+ * Crawl Google rankings for a batch of keywords
+ */
+app.post('/api/seo/crawl-rankings', async (req, res) => {
+  const { projectId, keywords, geoLocation = 'US', deviceType = 'desktop', sessionId } = req.body;
+  const { browser_customer_id, browser_username, browser_password } = req.body;
+  const { supabaseUrl, supabaseKey } = req.body;
+
+  if (!keywords || keywords.length === 0) {
+    return res.status(400).json({ success: false, error: 'keywords array required' });
+  }
+
+  if (!browser_customer_id || !browser_username || !browser_password) {
+    return res.status(400).json({ success: false, error: 'Browser API credentials required' });
+  }
+
+  console.log(`[SEO-CRAWL] Starting ranking crawl for project: ${projectId} (${keywords.length} keywords)`);
+
+  try {
+    const seoEngine = new SEOBrowserEngine({
+      browser_customer_id,
+      browser_username,
+      browser_password
+    });
+
+    await seoEngine.connect();
+
+    const results = [];
+
+    for (const keywordData of keywords) {
+      try {
+        const rankingData = await seoEngine.searchAndExtractRankings(
+          keywordData.keyword,
+          geoLocation,
+          deviceType
+        );
+
+        const currentRank = rankingData.rankings.findIndex(
+          r => r.domain.includes(new URL(keywordData.targetDomain).hostname.replace('www.', ''))
+        ) + 1 || null;
+
+        results.push({
+          keywordId: keywordData.id,
+          keyword: keywordData.keyword,
+          currentRank,
+          rankingData,
+          timestamp: new Date().toISOString(),
+          success: true
+        });
+
+        if (supabaseUrl && supabaseKey && sessionId) {
+          await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'info',
+            `Ranked keyword "${keywordData.keyword}" at position ${currentRank}`,
+            { keyword: keywordData.keyword, rank: currentRank }
+          );
+        }
+
+        await new Promise(r => setTimeout(r, 2000));
+      } catch (error) {
+        console.error(`[SEO-CRAWL] Error crawling "${keywordData.keyword}": ${error.message}`);
+        results.push({
+          keywordId: keywordData.id,
+          keyword: keywordData.keyword,
+          success: false,
+          error: error.message
+        });
+      }
+    }
+
+    await seoEngine.disconnect();
+
+    console.log(`[SEO-CRAWL] Completed: ${results.filter(r => r.success).length}/${results.length} keywords`);
+
+    return res.json({
+      success: true,
+      projectId,
+      totalKeywords: keywords.length,
+      successCount: results.filter(r => r.success).length,
+      results
+    });
+  } catch (error) {
+    console.error(`[SEO-CRAWL] Fatal error: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/seo/click-session
+ * Simulate search + click on target website
+ */
+app.post('/api/seo/click-session', async (req, res) => {
+  const {
+    campaignId,
+    projectId,
+    keyword,
+    targetUrl,
+    geoLocation = 'US',
+    deviceType = 'desktop',
+    sessionDurationSec = 60,
+    bounceRate = 0,
+    sessionId,
+    supabaseUrl,
+    supabaseKey
+  } = req.body;
+
+  const { browser_customer_id, browser_username, browser_password } = req.body;
+
+  if (!keyword || !targetUrl) {
+    return res.status(400).json({ success: false, error: 'keyword and targetUrl required' });
+  }
+
+  if (!browser_customer_id || !browser_username || !browser_password) {
+    return res.status(400).json({ success: false, error: 'Browser API credentials required' });
+  }
+
+  console.log(`[SEO-CLICK] Click session: "${keyword}" → ${targetUrl}`);
+
+  try {
+    const seoEngine = new SEOBrowserEngine({
+      browser_customer_id,
+      browser_username,
+      browser_password
+    });
+
+    await seoEngine.connect();
+
+    const clickData = await seoEngine.searchAndClick(keyword, targetUrl, geoLocation, {
+      deviceType,
+      sessionDurationSec,
+      bounceRate
+    });
+
+    await seoEngine.disconnect();
+
+    console.log(`[SEO-CLICK] ✓ Click session completed (${clickData.sessionDuration}s)`);
+
+    if (supabaseUrl && supabaseKey && sessionId) {
+      try {
+        await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'success',
+          `Click session completed: ${keyword}`,
+          { keyword, duration: clickData.sessionDuration, bounced: clickData.didBounce }
+        );
+      } catch (e) {
+        console.log('[SEO-CLICK] Note: Could not log to session_logs');
+      }
+    }
+
+    return res.json({
+      success: true,
+      campaignId,
+      projectId,
+      sessionData: clickData
+    });
+  } catch (error) {
+    console.error(`[SEO-CLICK] Error: ${error.message}`);
+
+    if (supabaseUrl && supabaseKey && sessionId) {
+      try {
+        await insertSessionLog(supabaseUrl, supabaseKey, sessionId, 'error',
+          `Click session failed: ${error.message}`,
+          { error: error.message }
+        );
+      } catch (e) {
+        console.log('[SEO-CLICK] Note: Could not log error to session_logs');
+      }
+    }
+
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/seo/health
+ * Health check for SEO+ system
+ */
+app.get('/api/seo/health', (req, res) => {
+  return res.json({
+    success: true,
+    service: 'seo-plus',
+    version: '1.0.0',
+    endpoints: [
+      'POST /api/seo/crawl-rankings',
+      'POST /api/seo/click-session',
+      'GET /api/seo/health'
+    ],
+    features: [
+      'Bright Data Browser API WebSocket',
+      'Google SERP ranking extraction',
+      'Click simulation with human behavior',
+      'Device fingerprinting',
+      'Geo-targeting'
+    ],
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.listen(3000, () => {
-  console.log('✅ Server running on port 3000 - Browser API + Luna Proxy + SERP API');
+  console.log('✅ Server running on port 3000 - Browser API + Luna Proxy + SERP API + SEO+');
   console.log('📊 Search Traffic: Browser API (auto-CAPTCHA solving)');
   console.log('🔄 Direct Traffic: Luna Proxy (cost-effective)');
+  console.log('📈 SEO+: Ranking crawler + Click campaigns (Bright Data Browser API WebSocket)');
 });
+
