@@ -7,8 +7,32 @@ const corsHeaders = {
 };
 
 const AWS_AUTOMATE_URL = 'http://traffic-tool-alb-681297197.us-east-1.elb.amazonaws.com:3000/api/automate';
-const MAX_PER_INVOCATION = 1200;
-const SUB_BATCH_SIZE = 60;
+const MAX_PER_INVOCATION = 250;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function enqueueWithRetry(payload: any): Promise<boolean> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(AWS_AUTOMATE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(8000),
+        body: JSON.stringify(payload),
+      });
+
+      if (res.status === 200 || res.status === 202) {
+        return true;
+      }
+    } catch {
+      // Ignore and retry
+    }
+
+    await sleep(150 * attempt);
+  }
+
+  return false;
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -76,52 +100,36 @@ Deno.serve(async (req: Request) => {
 
     let accepted = 0;
 
-    for (let i = start; i < endExclusive; i += SUB_BATCH_SIZE) {
-      const subEnd = Math.min(i + SUB_BATCH_SIZE, endExclusive);
-      const requests: Promise<void>[] = [];
+    // Match the previously working method: sequential enqueue + retries + pacing
+    for (let i = start; i < endExclusive; i++) {
+      const sessionNum = i + 1;
+      const sessionId = `${runId}-${sessionNum}`;
+      const geoLocation = geoLocations[i % geoLocations.length];
+      const url = `${targetUrl}${targetUrl.includes('?') ? '&' : '?'}${runId}=${sessionNum}`;
 
-      for (let j = i; j < subEnd; j++) {
-        const sessionNum = j + 1;
-        const sessionId = `${runId}-${sessionNum}`;
-        const geoLocation = geoLocations[j % geoLocations.length];
-        const url = `${targetUrl}${targetUrl.includes('?') ? '&' : '?'}${runId}=${sessionNum}`;
+      const payload = {
+        sessionId,
+        campaignType: campaign.campaign_type || 'direct',
+        url,
+        targetUrl: url,
+        geoLocation,
+        proxy: proxyUrl,
+        proxyUsername: campaign.proxy_username,
+        proxyPassword: campaign.proxy_password,
+        proxyProvider: 'brightdata',
+        headlessMode: 'false',
+        minPagesPerSession: 1,
+        maxPagesPerSession: 2,
+        sessionDurationMin: campaign.session_duration_min || 25,
+        sessionDurationMax: campaign.session_duration_max || 40,
+        // Lower default cap to reduce total traffic usage for large campaigns
+        maxBandwidthKB: campaign.max_bandwidth_mb ? Math.round(campaign.max_bandwidth_mb * 1024) : 120,
+      };
 
-        const payload = {
-          sessionId,
-          campaignType: campaign.campaign_type || 'direct',
-          url,
-          targetUrl: targetUrl,
-          geoLocation,
-          proxy: proxyUrl,
-          proxyUsername: campaign.proxy_username,
-          proxyPassword: campaign.proxy_password,
-          proxyProvider: 'brightdata',
-          headlessMode: 'false',
-          maxBandwidthKB: campaign.max_bandwidth_mb ? Math.round(campaign.max_bandwidth_mb * 1024) : 220,
-          minPagesPerSession: 1,
-          maxPagesPerSession: 2,
-          sessionDurationMin: campaign.session_duration_min || 20,
-          sessionDurationMax: campaign.session_duration_max || 30,
-          extensionId: 'hoklmmgfnpapgjgcpechhaamimifchmp',
-        };
+      const ok = await enqueueWithRetry(payload);
+      if (ok) accepted += 1;
 
-        requests.push(
-          fetch(AWS_AUTOMATE_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          })
-            .then(async (res) => {
-              const text = await res.text();
-              if (res.ok && (text.includes('accepted') || text.includes('queued'))) {
-                accepted += 1;
-              }
-            })
-            .catch(() => {})
-        );
-      }
-
-      await Promise.all(requests);
+      await sleep(90);
     }
 
     const hasMore = endExclusive < totalSessions;
